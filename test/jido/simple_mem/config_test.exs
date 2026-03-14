@@ -34,6 +34,8 @@ defmodule Jido.SimpleMem.ConfigTest do
     assert String.ends_with?(opts[:path], "simplemem.sqlite3")
     assert defaults.embedding_client == Jido.SimpleMem.EmbeddingClient.ReqLLM
     assert defaults.embedding_client_opts == []
+    assert defaults.memory_policy.capture_explicit_memories
+    refute defaults.memory_policy.capture_queries
   end
 
   test "defaults choose Turso store when url and token are present" do

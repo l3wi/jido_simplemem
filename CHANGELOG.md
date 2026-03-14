@@ -17,5 +17,8 @@
   `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are present.
 - Replaced the local hash embedding fallback with a strict `ReqLLM` embedding
   client that fails when no embedding model or provider API key env var is set.
+- Added a default durable-memory policy that powers `post_turn`, filters
+  auto-captured signals, and rewrites first-person user facts into standalone
+  memory units.
 - Added test coverage for extraction, mapping, retrieval, explanations, plugin
   behavior, and Postgres integration.

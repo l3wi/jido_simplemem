@@ -3,6 +3,7 @@ defmodule Jido.SimpleMem.Config do
 
   alias Jido.SimpleMem.EmbeddingClient.ReqLLM
   alias Jido.SimpleMem.LLMClient.Noop
+  alias Jido.SimpleMem.Policy
   alias Jido.SimpleMem.Store.{SQLite, Turso}
 
   @plugin_state_key :__simplemem__
@@ -16,6 +17,7 @@ defmodule Jido.SimpleMem.Config do
       llm_client_opts: [],
       embedding_client: ReqLLM,
       embedding_client_opts: default_embedding_client_opts(),
+      memory_policy: Policy.default_options(),
       retrieval_limit: 10,
       context_token_budget: 1_200,
       reflection_enabled: true,

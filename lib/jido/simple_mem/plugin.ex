@@ -12,9 +12,9 @@ defmodule Jido.SimpleMem.Plugin do
 
   alias Jido.Signal
   alias Jido.SimpleMem.Actions.{Answer, Forget, PostTurn, PreTurn, Remember, Retrieve}
-  alias Jido.SimpleMem.Config
+  alias Jido.SimpleMem.{Config, Policy}
 
-  @default_capture_patterns ["ai.react.query", "ai.llm.response", "ai.tool.result"]
+  @default_capture_patterns ["memory.*", "ai.react.query", "ai.llm.response", "ai.tool.result"]
 
   @state_schema Zoi.object(%{
                   namespace: Zoi.string() |> Zoi.optional(),
@@ -24,6 +24,7 @@ defmodule Jido.SimpleMem.Plugin do
                   llm_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
                   embedding_client: Zoi.any(),
                   embedding_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
+                  memory_policy: Zoi.map() |> Zoi.default(Policy.default_options()),
                   auto_capture: Zoi.boolean() |> Zoi.default(true),
                   capture_signal_patterns:
                     Zoi.list(Zoi.string()) |> Zoi.default(@default_capture_patterns),
@@ -45,6 +46,7 @@ defmodule Jido.SimpleMem.Plugin do
                    embedding_client:
                      Zoi.any() |> Zoi.default(Jido.SimpleMem.EmbeddingClient.ReqLLM),
                    embedding_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
+                   memory_policy: Zoi.map() |> Zoi.default(Policy.default_options()),
                    auto_capture: Zoi.boolean() |> Zoi.default(true),
                    capture_signal_patterns:
                      Zoi.list(Zoi.string()) |> Zoi.default(@default_capture_patterns),
@@ -87,6 +89,7 @@ defmodule Jido.SimpleMem.Plugin do
        llm_client_opts: config[:llm_client_opts] || defaults.llm_client_opts,
        embedding_client: config[:embedding_client] || defaults.embedding_client,
        embedding_client_opts: config[:embedding_client_opts] || defaults.embedding_client_opts,
+       memory_policy: config[:memory_policy] || defaults.memory_policy,
        auto_capture: Map.get(config, :auto_capture, true),
        capture_signal_patterns: config[:capture_signal_patterns] || @default_capture_patterns,
        capture_rules: config[:capture_rules] || %{},
@@ -125,8 +128,15 @@ defmodule Jido.SimpleMem.Plugin do
         )
 
     if should_capture do
-      attrs = build_capture_attrs(signal, state)
-      _ = Jido.SimpleMem.remember(Map.get(context, :agent, %{}), attrs, [])
+      case Policy.signal_capture(signal, state) do
+        {:remember, memories} ->
+          Enum.each(memories, fn attrs ->
+            _ = Jido.SimpleMem.remember(Map.get(context, :agent, %{}), attrs, [])
+          end)
+
+        {:skip, _reason} ->
+          :ok
+      end
     end
 
     {:ok, :continue}
@@ -140,39 +150,6 @@ defmodule Jido.SimpleMem.Plugin do
   @impl Jido.Plugin
   def on_restore(pointer, _context) when is_map(pointer), do: {:ok, pointer}
   def on_restore(_pointer, _context), do: {:ok, nil}
-
-  defp build_capture_attrs(%Signal{} = signal, state) do
-    data = normalize_data(signal.data)
-    text = data[:query] || data[:text] || data[:content] || inspect(data)
-    rule = Map.get(state[:capture_rules] || %{}, signal.type, %{})
-
-    %{
-      class: Map.get(rule, :class, :episodic),
-      kind: Map.get(rule, :kind, infer_kind(signal.type)),
-      text: Map.get(rule, :text, text),
-      content: data,
-      tags: Enum.uniq((Map.get(rule, :tags, []) |> List.wrap()) ++ ["signal:#{signal.type}"]),
-      source: Map.get(rule, :source, signal.source),
-      metadata:
-        Map.merge(
-          %{
-            "signal_id" => signal.id,
-            "signal_type" => signal.type
-          },
-          Map.get(rule, :metadata, %{})
-        ),
-      observed_at: signal_time_ms(signal.time)
-    }
-  end
-
-  defp infer_kind(type) do
-    cond do
-      String.ends_with?(type, ".query") -> :query
-      String.ends_with?(type, ".response") -> :response
-      String.ends_with?(type, ".result") -> :result
-      true -> :event
-    end
-  end
 
   defp signal_matches_any?(_type, []), do: false
 
@@ -197,28 +174,6 @@ defmodule Jido.SimpleMem.Plugin do
       end
     end)
   end
-
-  defp signal_time_ms(nil), do: System.system_time(:millisecond)
-
-  defp signal_time_ms(time) when is_binary(time) do
-    case DateTime.from_iso8601(time) do
-      {:ok, datetime, _offset} -> DateTime.to_unix(datetime, :millisecond)
-      _ -> System.system_time(:millisecond)
-    end
-  end
-
-  defp normalize_data(%{} = data), do: data
-
-  defp normalize_data(list) when is_list(list) do
-    if Keyword.keyword?(list) do
-      Map.new(list)
-    else
-      %{items: list}
-    end
-  end
-
-  defp normalize_data(nil), do: %{}
-  defp normalize_data(other), do: %{value: other}
 
   defp resolve_namespace(agent, config) do
     config[:namespace] ||

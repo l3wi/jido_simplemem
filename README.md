@@ -16,6 +16,7 @@ answering, and turn hooks.
 - in-memory storage for tests and local development
 - Postgres-backed storage for v1 persistence
 - Turso/libSQL storage with FTS5 and native vector indexing
+- a default durable-memory policy for out-of-the-box agent behavior
 
 ## Architecture
 
@@ -30,6 +31,20 @@ pipeline:
 
 The external contract stays compatible with `Jido.Memory.Record`; the richer
 internal representation lives in `Jido.SimpleMem.MemoryUnit`.
+
+## Default Behavior
+
+With `Jido.SimpleMem.Plugin` enabled, the package defaults to a SimpleMem-style
+memory policy:
+
+- `pre_turn` retrieves relevant memory and builds a compact context pack
+- `post_turn` stores only durable facts instead of raw turn transcripts
+- explicit user memory instructions such as `remember that...` are stored
+- first-person durable facts are rewritten into standalone memory units
+- generic questions and most assistant chatter are skipped by default
+
+This is the intended out-of-the-box behavior. The plugin is opinionated about
+memory quality and defaults to storing fewer, better memories.
 
 ## Usage
 
@@ -53,6 +68,11 @@ plugins: [
    }}
 ]
 ```
+
+For the default batteries-included behavior, call `pre_turn` before the agent
+responds and `post_turn` after the agent finishes a turn. `post_turn` will
+store durable user facts such as profile details, preferences, and constraints,
+and skip ordinary chatter.
 
 By default the plugin uses a local SQLite database at `.jido/simplemem.sqlite3`.
 You can override that path with `JIDO_SIMPLEMEM_LOCAL_DB_PATH`.
@@ -98,6 +118,7 @@ Plugin config supports:
 - `store` and `store_opts`
 - `llm_client` and `llm_client_opts`
 - `embedding_client` and `embedding_client_opts`
+- `memory_policy`
 - `retrieval_limit`
 - `context_token_budget`
 - `reflection_enabled`
@@ -105,23 +126,29 @@ Plugin config supports:
 - `capture_signal_patterns`
 - `capture_rules`
 
+See [docs/explanations/default-memory-policy.md](docs/explanations/default-memory-policy.md)
+for the default heuristics and the durable-memory rules the plugin applies
+automatically.
+
 The default implementation ships with a noop LLM client and a strict
 `ReqLLM` embedding client. Embeddings are required: the package now fails if no
 embedding model is configured or if the provider API key env var is missing.
 
 ### Environment Variables
 
-- `JIDO_SIMPLEMEM_LOCAL_DB_PATH`: optional path override for the local SQLite database
-- `TURSO_DATABASE_URL`: optional remote libSQL/Turso URL; when set together with `TURSO_AUTH_TOKEN`, it becomes the default store
-- `TURSO_AUTH_TOKEN`: optional Turso auth token used with `TURSO_DATABASE_URL`
-- `JIDO_SIMPLEMEM_EMBEDDING_MODEL`: optional default embedding model, for example `openai:text-embedding-3-small`
+Required:
 
-For embeddings, the provider API key must also be present in the provider's
-expected env var, for example:
+- `JIDO_SIMPLEMEM_EMBEDDING_MODEL`: embedding model spec, for example `openai:text-embedding-3-small`
+- provider API key env var for that model, for example:
+  - `OPENAI_API_KEY`
+  - `ANTHROPIC_API_KEY`
+  - `GOOGLE_API_KEY`
 
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GOOGLE_API_KEY`
+Optional:
+
+- `JIDO_SIMPLEMEM_LOCAL_DB_PATH`: path override for the local SQLite database
+- `TURSO_DATABASE_URL`: remote libSQL/Turso URL; when set together with `TURSO_AUTH_TOKEN`, it becomes the default store
+- `TURSO_AUTH_TOKEN`: Turso auth token used with `TURSO_DATABASE_URL`
 
 ## Turso Notes
 

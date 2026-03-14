@@ -7,13 +7,14 @@ defmodule Jido.SimpleMem.Actions.PreTurn do
     schema: [
       question: [type: :string, required: false],
       prompt: [type: :string, required: false],
+      user_input: [type: :string, required: false],
       limit: [type: :integer, required: false],
       context_result_key: [type: :any, required: false]
     ]
 
   @impl true
   def run(params, context) do
-    question = params[:question] || params[:prompt] || "recent context"
+    question = params[:question] || params[:prompt] || params[:user_input] || "recent context"
 
     with {:ok, explain} <-
            Jido.SimpleMem.explain(context, %{question: question, limit: params[:limit]}, []),

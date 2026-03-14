@@ -7,7 +7,11 @@ This folder contains a minimal Jido agent that uses `Jido.SimpleMem.Plugin` to:
 - answer questions from memory
 - forget stored items
 
-## Requirements
+In normal agent usage, the plugin is intended to run `pre_turn` before
+responding and `post_turn` after a turn so it can retrieve context and persist
+durable user facts automatically.
+
+## Required Env
 
 Embeddings are required. Before running the demo, set:
 
@@ -15,6 +19,8 @@ Embeddings are required. Before running the demo, set:
 export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
 export OPENAI_API_KEY="..."
 ```
+
+## Optional Env
 
 Storage defaults:
 

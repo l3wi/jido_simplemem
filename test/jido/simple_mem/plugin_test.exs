@@ -38,7 +38,7 @@ defmodule Jido.SimpleMem.PluginTest do
     assert {"answer", Answer} in routes
   end
 
-  test "handle_signal auto-captures configured patterns", %{table: table} do
+  test "handle_signal auto-captures explicit memory instructions", %{table: table} do
     {:ok, plugin_state} =
       Plugin.mount(%{id: "agent-cap"}, %{
         store: {InMemory, [table: table]},
@@ -49,11 +49,35 @@ defmodule Jido.SimpleMem.PluginTest do
 
     agent = %{id: "agent-cap", state: %{__simplemem__: plugin_state}}
     context = %{agent: agent}
+
+    signal =
+      Jido.Signal.new!(
+        "ai.react.query",
+        %{query: "Remember that I prefer aisle seats."},
+        source: "/ai"
+      )
+
+    assert {:ok, :continue} = Plugin.handle_signal(signal, context)
+    assert {:ok, records} = Jido.SimpleMem.retrieve(agent, "What does the user prefer?")
+    assert Enum.any?(records, &(&1.text =~ "aisle seats"))
+  end
+
+  test "handle_signal skips ephemeral queries by default", %{table: table} do
+    {:ok, plugin_state} =
+      Plugin.mount(%{id: "agent-skip"}, %{
+        store: {InMemory, [table: table]},
+        store_opts: [table: table],
+        embedding_client: Jido.SimpleMem.TestSupport.FakeEmbeddingClient,
+        capture_signal_patterns: ["ai.react.query"]
+      })
+
+    agent = %{id: "agent-skip", state: %{__simplemem__: plugin_state}}
+    context = %{agent: agent}
     signal = Jido.Signal.new!("ai.react.query", %{query: "what happened?"}, source: "/ai")
 
     assert {:ok, :continue} = Plugin.handle_signal(signal, context)
     assert {:ok, records} = Jido.SimpleMem.retrieve(agent, "what happened?")
-    assert Enum.any?(records, &(&1.kind == :query))
+    assert records == []
   end
 
   test "pre_turn and post_turn actions work with plugin-mounted state", %{table: table} do

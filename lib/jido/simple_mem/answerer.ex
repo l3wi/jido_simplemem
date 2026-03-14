@@ -1,6 +1,8 @@
 defmodule Jido.SimpleMem.Answerer do
   @moduledoc false
 
+  alias Jido.SimpleMem.Tokenizer
+
   @question_words MapSet.new(~w[who what when where why how does do did is are can should])
 
   @spec answer(map(), map(), map()) :: {:ok, map()} | {:error, term()}
@@ -59,16 +61,57 @@ defmodule Jido.SimpleMem.Answerer do
   end
 
   defp select_focus_record(question, records) do
-    requested_people = question_people(Map.get(question, :question, ""))
+    question_text = Map.get(question, :question, "")
+    requested_people = question_people(question_text)
+    question_keywords = Tokenizer.tokens(question_text)
 
-    Enum.find(records, hd(records), fn record ->
+    Enum.max_by(records, fn record ->
       record_people = record.metadata["simplemem"]["persons"] || []
-      requested_people != [] and Enum.all?(requested_people, &(&1 in record_people))
+      record_tokens = Tokenizer.tokens(record.text || "")
+
+      score =
+        keyword_overlap_score(question_keywords, record_tokens) +
+          person_match_score(requested_people, record_people) +
+          preference_score(question_text, record.text || "")
+
+      {score, record.observed_at || 0}
     end)
   end
 
   defp prioritize_records(top, records) do
     [top | Enum.reject(records, &(&1.id == top.id))]
+  end
+
+  defp keyword_overlap_score(question_keywords, record_tokens) do
+    Tokenizer.overlap(question_keywords, record_tokens)
+  end
+
+  defp person_match_score([], _record_people), do: 0
+
+  defp person_match_score(requested_people, record_people) do
+    cond do
+      Enum.all?(requested_people, &(&1 in record_people)) -> 3
+      Enum.any?(requested_people, &(&1 in record_people)) -> 1
+      true -> 0
+    end
+  end
+
+  defp preference_score(question_text, record_text) do
+    cond do
+      String.match?(question_text, ~r/\bprefer|favorite|like|love|hate|dislike\b/i) and
+          String.match?(record_text, ~r/\bprefer|favorite|like|love|hate|dislike\b/i) ->
+        4
+
+      String.match?(question_text, ~r/\bwhere\b/i) and
+          String.match?(record_text, ~r/\blives in|based in|from\b/i) ->
+        4
+
+      String.match?(question_text, ~r/\bname\b/i) and String.match?(record_text, ~r/\bname\b/i) ->
+        4
+
+      true ->
+        0
+    end
   end
 
   defp question_people(question) when is_binary(question) do

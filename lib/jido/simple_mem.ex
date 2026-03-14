@@ -163,6 +163,13 @@ defmodule Jido.SimpleMem do
          llm_opts: llm_opts,
          embedding_client: embedding_client,
          embedding_opts: embedding_opts,
+         memory_policy:
+           pick_value(
+             opts,
+             attrs,
+             :memory_policy,
+             plugin_state[:memory_policy] || defaults.memory_policy
+           ),
          retrieval_limit:
            pick_value(
              opts,
