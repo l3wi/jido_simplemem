@@ -14,16 +14,17 @@ defmodule Jido.SimpleMem.Actions.PreTurn do
 
   @impl true
   def run(params, context) do
+    target = Map.get(context, :agent, context)
     question = params[:question] || params[:prompt] || params[:user_input] || "recent context"
 
-    with {:ok, explain} <-
-           Jido.SimpleMem.explain(context, %{question: question, limit: params[:limit]}, []),
+    with {:ok, answer} <-
+           Jido.SimpleMem.ask(target, %{question: question, limit: params[:limit]}, []),
          context_key <- params[:context_result_key] || :simplemem_context do
       {:ok,
        %{
-         context_key => explain.context_pack,
-         memory_results: explain.records,
-         memory_plan: explain.plan
+         context_key => answer.context,
+         memory_results: answer.records,
+         memory_answer: answer.answer
        }}
     end
   end

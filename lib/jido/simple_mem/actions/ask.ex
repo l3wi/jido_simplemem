@@ -1,9 +1,9 @@
-defmodule Jido.SimpleMem.Actions.Answer do
+defmodule Jido.SimpleMem.Actions.Ask do
   @moduledoc false
 
   use Jido.Action,
-    name: "simplemem_answer",
-    description: "Answer a question from SimpleMem",
+    name: "simplemem_ask",
+    description: "Answer a question from buffered SimpleMem state",
     schema: [
       question: [type: :string, required: true],
       limit: [type: :integer, required: false],
@@ -12,7 +12,9 @@ defmodule Jido.SimpleMem.Actions.Answer do
 
   @impl true
   def run(params, context) do
-    case Jido.SimpleMem.answer(context, params, []) do
+    target = Map.get(context, :agent, context)
+
+    case Jido.SimpleMem.ask(target, params, []) do
       {:ok, result} ->
         key = params[:answer_result_key] || :memory_answer
 

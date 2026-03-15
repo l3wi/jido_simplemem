@@ -6,55 +6,39 @@ defmodule Jido.SimpleMem.Extractor do
   @spec extract(map(), map()) :: {:ok, MemoryUnit.t()} | {:error, term()}
   def extract(attrs, runtime) do
     attrs = normalize_map(attrs)
-    llm_attrs = maybe_llm_extract(attrs, runtime)
-
     observed_at = Map.get(attrs, :observed_at, runtime.now)
-    text = pick(attrs, llm_attrs, :text) || extract_text(attrs)
-    timestamp = pick(attrs, llm_attrs, :timestamp) || anchor_relative_time(text, observed_at)
-    persons = pick_list(attrs, llm_attrs, :persons, extract_persons(text))
-    location = pick(attrs, llm_attrs, :location) || extract_location(text)
-    entities = pick_list(attrs, llm_attrs, :entities, [])
-    topic = pick(attrs, llm_attrs, :topic) || infer_topic(text)
+    text = pick(attrs, :text) || extract_text(attrs)
+    timestamp = pick(attrs, :timestamp) || anchor_relative_time(text, observed_at)
+    persons = pick_list(attrs, :persons, extract_persons(text))
+    location = pick(attrs, :location) || extract_location(text)
+    entities = pick_list(attrs, :entities, [])
+    topic = pick(attrs, :topic) || infer_topic(text)
     keywords = keywords(text, persons, entities, location, topic)
 
-    restatement =
-      pick(attrs, llm_attrs, :restatement) || restatement(text, persons, timestamp, location)
+    restatement = pick(attrs, :restatement) || restatement(text, persons, timestamp, location)
 
-    embedding = embed(restatement, runtime)
-
-    MemoryUnit.new(%{
-      id: Map.get(attrs, :id),
-      namespace: runtime.namespace,
-      restatement: restatement,
-      original_text: text,
-      content: Map.get(attrs, :content, %{}),
-      class: Map.get(attrs, :class, :episodic),
-      kind: Map.get(attrs, :kind, :event),
-      tags: Map.get(attrs, :tags, []),
-      source: Map.get(attrs, :source),
-      observed_at: observed_at,
-      expires_at: Map.get(attrs, :expires_at),
-      timestamp: timestamp,
-      persons: persons,
-      entities: entities,
-      location: location,
-      topic: topic,
-      keywords: keywords,
-      metadata: Map.get(attrs, :metadata, %{}),
-      embedding: embedding
-    })
-  end
-
-  defp maybe_llm_extract(attrs, runtime) do
-    client = runtime.llm_client
-
-    if function_exported?(client, :extract, 2) do
-      case client.extract(attrs, runtime.llm_opts) do
-        {:ok, result} when is_map(result) -> result
-        _ -> %{}
-      end
-    else
-      %{}
+    with {:ok, embedding} <- embed(restatement, runtime) do
+      MemoryUnit.new(%{
+        id: Map.get(attrs, :id),
+        namespace: runtime.namespace,
+        restatement: restatement,
+        original_text: text,
+        content: Map.get(attrs, :content, %{}),
+        class: Map.get(attrs, :class, :episodic),
+        kind: Map.get(attrs, :kind, :event),
+        tags: Map.get(attrs, :tags, []),
+        source: Map.get(attrs, :source),
+        observed_at: observed_at,
+        expires_at: Map.get(attrs, :expires_at),
+        timestamp: timestamp,
+        persons: persons,
+        entities: entities,
+        location: location,
+        topic: topic,
+        keywords: keywords,
+        metadata: Map.get(attrs, :metadata, %{}),
+        embedding: embedding
+      })
     end
   end
 
@@ -68,13 +52,12 @@ defmodule Jido.SimpleMem.Extractor do
     end
   end
 
-  defp pick(attrs, llm_attrs, key) do
-    Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key)) || Map.get(llm_attrs, key) ||
-      Map.get(llm_attrs, Atom.to_string(key))
+  defp pick(attrs, key) do
+    Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
   end
 
-  defp pick_list(attrs, llm_attrs, key, fallback) do
-    case pick(attrs, llm_attrs, key) do
+  defp pick_list(attrs, key, fallback) do
+    case pick(attrs, key) do
       nil -> fallback
       list when is_list(list) -> Enum.map(list, &to_string/1)
       value -> [to_string(value)]
@@ -171,8 +154,9 @@ defmodule Jido.SimpleMem.Extractor do
 
   defp embed(text, runtime) do
     case runtime.embedding_client.embed(text, runtime.embedding_opts) do
-      {:ok, vector} -> vector
-      _ -> []
+      {:ok, vector} -> {:ok, vector}
+      {:error, _reason} = error -> error
+      other -> {:error, other}
     end
   end
 

@@ -1,16 +1,10 @@
-defmodule Jido.SimpleMem.Actions.PostTurn do
+defmodule Jido.SimpleMem.Actions.Finalize do
   @moduledoc false
 
   use Jido.Action,
-    name: "simplemem_post_turn",
-    description: "Append a turn to the buffered SimpleMem session",
+    name: "simplemem_finalize",
+    description: "Flush buffered SimpleMem dialogue into durable memories",
     schema: [
-      text: [type: :string, required: false],
-      user_input: [type: :string, required: false],
-      assistant_response: [type: :string, required: false],
-      tool_results: [type: :any, required: false],
-      tags: [type: :any, required: false],
-      metadata: [type: :any, required: false],
       session_id: [type: :string, required: false],
       await: [type: :boolean, required: false],
       timeout_ms: [type: :integer, required: false]
@@ -20,12 +14,7 @@ defmodule Jido.SimpleMem.Actions.PostTurn do
   def run(params, context) do
     target = Map.get(context, :agent, context)
 
-    dialogues =
-      []
-      |> maybe_add_dialogue("user", params[:user_input], params)
-      |> maybe_add_dialogue("assistant", params[:assistant_response] || params[:text], params)
-
-    with {:ok, job} <- Jido.SimpleMem.enqueue_add_dialogues(target, dialogues, session_opts(params)) do
+    with {:ok, job} <- Jido.SimpleMem.enqueue_finalize(target, session_opts(params)) do
       if params[:await] do
         await_result(job.id, params[:timeout_ms])
       else
@@ -33,23 +22,10 @@ defmodule Jido.SimpleMem.Actions.PostTurn do
          %{
            job_id: job.id,
            status: job.status,
-           queued?: true,
-           dialogue_count: length(dialogues)
+           queued?: true
          }}
       end
     end
-  end
-
-  defp maybe_add_dialogue(dialogues, _speaker, value, _params) when value in [nil, ""],
-    do: dialogues
-
-  defp maybe_add_dialogue(dialogues, speaker, value, params) do
-    metadata =
-      params[:metadata]
-      |> normalize_metadata()
-      |> Map.put("speaker", speaker)
-
-    dialogues ++ [%{speaker: speaker, content: value, metadata: metadata}]
   end
 
   defp session_opts(params) do
@@ -92,9 +68,4 @@ defmodule Jido.SimpleMem.Actions.PostTurn do
         {:error, reason}
     end
   end
-
-  defp normalize_metadata(nil), do: %{}
-  defp normalize_metadata(%{} = metadata), do: metadata
-  defp normalize_metadata(list) when is_list(list), do: Map.new(list)
-  defp normalize_metadata(_), do: %{}
 end

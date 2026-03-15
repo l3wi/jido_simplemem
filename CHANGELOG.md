@@ -2,23 +2,19 @@
 
 ## Unreleased
 
-- Added `Jido.SimpleMem` facade APIs for `remember/3`, `retrieve/3`, `answer/3`,
-  `forget/3`, and `explain/3`.
-- Added `Jido.SimpleMem.Plugin` and action modules for `remember`, `retrieve`,
-  `answer`, `forget`, `pre_turn`, and `post_turn`.
-- Added a SimpleMem-style pipeline with extractor, synthesizer, planner,
-  retriever, ranker, answerer, and explainer components.
-- Added `Jido.SimpleMem.MemoryUnit` and mapper support for
-  `Jido.Memory.Record` interoperability.
-- Added in-memory and Postgres store implementations.
-- Added Turso/libSQL storage with native vector indexing, FTS5 lexical search,
-  and symbolic metadata retrieval.
-- Added a default local SQLite store and env-based switching to Turso when
-  `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are present.
-- Replaced the local hash embedding fallback with a strict `ReqLLM` embedding
-  client that fails when no embedding model or provider API key env var is set.
-- Added a default durable-memory policy that powers `post_turn`, filters
-  auto-captured signals, and rewrites first-person user facts into standalone
-  memory units.
-- Added test coverage for extraction, mapping, retrieval, explanations, plugin
-  behavior, and Postgres integration.
+- Replaced the old multi-backend storage layer with a LanceDB-only runtime.
+- Added a supervised Python LanceDB worker using the official SDK plus Tantivy
+  FTS for local hybrid retrieval.
+- Persisted both finalized memories and buffered dialogue windows in LanceDB.
+- Removed the compatibility facade methods `remember/3`, `retrieve/3`,
+  `answer/3`, and `forget/3`.
+- Standardized the public API on `add_dialogue/4`, `add_dialogues/3`,
+  `finalize/2`, `ask/3`, `get_all_memories/2`, `delete_memory/3`, and `explain/3`.
+- Reworked the Jido plugin to expose only parity-oriented actions:
+  `pre_turn`, `post_turn`, `finalize`, `ask`, `get_all_memories`, and
+  `delete_memory`.
+- Replaced heuristic write admission with an LLM-first builder and explicit LLM
+  synthesis stage.
+- Aligned retrieval around planned hybrid search, source-priority merging, and
+  reflection rounds.
+- Updated docs, examples, and env configuration for Lance-only operation.

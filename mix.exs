@@ -12,7 +12,7 @@ defmodule Jido.SimpleMem.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
-      description: "Single-tier SimpleMem-inspired memory plugin for Jido agents",
+      description: "Buffered, LLM-first SimpleMem memory system for Jido agents",
       source_url: @source_url
     ]
   end
@@ -35,8 +35,7 @@ defmodule Jido.SimpleMem.MixProject do
       {:jido, "~> 2.0.0-rc.5"},
       {:jido_action, github: "agentjido/jido_action", branch: "main", override: true},
       {:jido_memory, github: "agentjido/jido_memory", branch: "main"},
-      {:exqlite, "~> 0.28"},
-      {:postgrex, "~> 0.20"},
+      {:jason, "~> 1.4"},
       {:req, "~> 0.5.17"},
       {:stream_data, "~> 1.1", only: :test}
     ]

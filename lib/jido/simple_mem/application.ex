@@ -8,12 +8,12 @@ defmodule Jido.SimpleMem.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      # Starts a worker by calling: Jido.SimpleMem.Worker.start_link(arg)
-      # {Jido.SimpleMem.Worker, arg}
+      {Registry, keys: :unique, name: Jido.SimpleMem.WorkerRegistry},
+      {DynamicSupervisor, strategy: :one_for_one, name: Jido.SimpleMem.WorkerSupervisor},
+      {Task.Supervisor, name: Jido.SimpleMem.TaskSupervisor},
+      Jido.SimpleMem.JobRunner
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Jido.SimpleMem.Supervisor]
     Supervisor.start_link(children, opts)
   end

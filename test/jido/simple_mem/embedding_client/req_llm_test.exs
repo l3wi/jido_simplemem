@@ -28,7 +28,7 @@ defmodule Jido.SimpleMem.EmbeddingClient.ReqLLMTest do
     assert {:error, error} =
              ReqLLM.embed("hello world", model: "openai:text-embedding-3-small")
 
-    assert Exception.message(error) =~ "provider API key env var required"
+    assert Exception.message(error) =~ "provider API key required for embeddings"
     assert Exception.message(error) =~ "OPENAI_API_KEY"
   end
 end

@@ -1,79 +1,54 @@
 defmodule Jido.SimpleMem.ConfusableFixtureE2ETest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Jido.SimpleMem.Store.SQLite
-  alias Jido.SimpleMem.TestSupport.ConfusablePeopleFixture
+  alias Jido.SimpleMem
+  alias Jido.SimpleMem.TestSupport.Factory
 
-  setup do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "jido_simplemem_fixture_#{System.unique_integer([:positive])}.sqlite3"
-      )
+  test "confusable people remain separated through synthesis and retrieval" do
+    target = Factory.target("fixture-agent", window_size: 4, overlap_size: 1)
 
-    on_exit(fn -> File.rm(path) end)
+    assert {:ok, _result} =
+             SimpleMem.add_dialogues(target, [
+               %{
+                 speaker: "user",
+                 content: "Alice Johnson lives in Portland and prefers espresso"
+               },
+               %{speaker: "user", content: "Alice Johnston lives in Seattle and prefers chai"},
+               %{speaker: "user", content: "Morgan Lee works on billing and prefers coffee"},
+               %{speaker: "user", content: "Morgan Reed works on growth and prefers tea"}
+             ])
 
-    target = %{
-      id: "fixture-agent",
-      state: %{
-        __simplemem__: %{
-          namespace: "agent:fixture-agent",
-          store: {SQLite, [path: path]},
-          store_opts: [path: path],
-          llm_client: Jido.SimpleMem.LLMClient.Noop,
-          llm_client_opts: [],
-          embedding_client: Jido.SimpleMem.TestSupport.FakeEmbeddingClient,
-          embedding_client_opts: [],
-          retrieval_limit: 5,
-          context_token_budget: 1200,
-          reflection_enabled: true,
-          max_reflection_rounds: 2
-        }
-      }
-    }
+    assert {:ok, alice} = SimpleMem.ask(target, "What does Alice Johnson prefer?")
+    assert alice.answer =~ "Alice Johnson"
+    assert alice.answer =~ "espresso"
 
-    records =
-      Enum.map(ConfusablePeopleFixture.dataset(), fn attrs ->
-        {:ok, record} = Jido.SimpleMem.remember(target, attrs)
-        record
-      end)
+    assert {:ok, johnston} = SimpleMem.ask(target, "Where does Alice Johnston live?")
+    assert johnston.answer =~ "Seattle"
 
-    %{target: target, records: records}
+    assert {:ok, reed} = SimpleMem.ask(target, "What does Morgan Reed prefer?")
+    assert reed.answer =~ "tea"
   end
 
-  test "fixture dataset resolves intentionally confusable people without mixing facts", %{
-    target: target
-  } do
-    Enum.each(ConfusablePeopleFixture.query_expectations(), fn {question, expected_name,
-                                                                expected_fact} ->
-      assert {:ok, explain} = Jido.SimpleMem.explain(target, question)
-      [top | _] = explain.records
-      assert top.text =~ expected_name
-      assert top.text =~ expected_fact
+  test "delete_memory removes only the selected confusable memory" do
+    target = Factory.target("delete-agent", window_size: 4, overlap_size: 1)
 
-      assert {:ok, answer} = Jido.SimpleMem.answer(target, question)
-      assert answer.answer =~ expected_name
-      assert answer.answer =~ expected_fact
-    end)
-  end
+    assert {:ok, _result} =
+             SimpleMem.add_dialogues(target, [
+               %{speaker: "user", content: "Morgan Lee prefers coffee"},
+               %{speaker: "user", content: "Morgan Reed prefers tea"},
+               %{speaker: "assistant", content: "Stored."},
+               %{speaker: "user", content: "Both names are easy to confuse"}
+             ])
 
-  test "forgeting one confusable record leaves the rest retrievable", %{
-    target: target,
-    records: records
-  } do
-    morgan_lee =
-      Enum.find(records, fn record ->
-        String.contains?(record.text || "", "Morgan Lee")
-      end)
+    assert {:ok, records} = SimpleMem.get_all_memories(target)
+    lee = Enum.find(records, &String.contains?(&1.text || "", "Morgan Lee"))
 
-    assert {:ok, true} = Jido.SimpleMem.forget(target, morgan_lee.id)
+    assert {:ok, true} = SimpleMem.delete_memory(target, lee.id)
 
-    assert {:ok, deleted_result} = Jido.SimpleMem.retrieve(target, "What does Morgan Lee prefer?")
-    refute Enum.any?(deleted_result, &(&1.id == morgan_lee.id))
+    assert {:ok, lee_result} = SimpleMem.ask(target, "What does Morgan Lee prefer?")
+    assert lee_result.answer == "No relevant information found"
 
-    assert {:ok, surviving_result} =
-             Jido.SimpleMem.retrieve(target, "What does Morgan Reed prefer?")
-
-    assert Enum.any?(surviving_result, &String.contains?(&1.text || "", "Morgan Reed"))
+    assert {:ok, reed_result} = SimpleMem.ask(target, "What does Morgan Reed prefer?")
+    assert reed_result.answer =~ "tea"
   end
 end

@@ -1,89 +1,39 @@
 defmodule Jido.SimpleMem.NamespaceIsolationReopenTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Jido.SimpleMem.Store.SQLite
+  alias Jido.SimpleMem
+  alias Jido.SimpleMem.TestSupport.Factory
 
-  setup do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "jido_simplemem_namespace_#{System.unique_integer([:positive])}.sqlite3"
-      )
+  test "multiple namespaces remain isolated across reopen on the same Lance path" do
+    path = Factory.unique_path("namespace")
 
-    on_exit(fn -> File.rm(path) end)
+    alpha =
+      Factory.target("agent-alpha", path: path, namespace: "user:alpha", session_id: "alpha")
 
-    alpha = target("agent-alpha", path)
-    beta = target("agent-beta", path)
+    beta = Factory.target("agent-beta", path: path, namespace: "user:beta", session_id: "beta")
 
-    %{path: path, alpha: alpha, beta: beta}
-  end
+    assert {:ok, _} =
+             SimpleMem.add_dialogues(alpha, [
+               %{speaker: "user", content: "Sam Carter lives in Lisbon"},
+               %{speaker: "user", content: "Sam Carter prefers espresso"}
+             ])
 
-  test "multiple agent namespaces remain isolated across reopen", %{
-    path: path,
-    alpha: alpha,
-    beta: beta
-  } do
-    assert {:ok, alpha_record} =
-             Jido.SimpleMem.remember(alpha, %{
-               text: "Sam Carter lives in Lisbon and prefers espresso",
-               persons: ["Sam Carter"],
-               topic: "profile"
-             })
+    assert {:ok, _} =
+             SimpleMem.add_dialogues(beta, [
+               %{speaker: "user", content: "Sam Carter lives in Madrid"},
+               %{speaker: "user", content: "Sam Carter prefers tea"}
+             ])
 
-    assert {:ok, beta_record} =
-             Jido.SimpleMem.remember(beta, %{
-               text: "Sam Carter lives in Oslo and prefers herbal tea",
-               persons: ["Sam Carter"],
-               topic: "profile"
-             })
+    reopened_alpha =
+      Factory.target("agent-alpha", path: path, namespace: "user:alpha", session_id: "alpha")
 
-    assert {:ok, alpha_records} = Jido.SimpleMem.retrieve(alpha, "Where does Sam Carter live?")
-    assert Enum.any?(alpha_records, &(&1.id == alpha_record.id))
-    refute Enum.any?(alpha_records, &(&1.id == beta_record.id))
+    reopened_beta =
+      Factory.target("agent-beta", path: path, namespace: "user:beta", session_id: "beta")
 
-    assert {:ok, beta_records} = Jido.SimpleMem.retrieve(beta, "Where does Sam Carter live?")
-    assert Enum.any?(beta_records, &(&1.id == beta_record.id))
-    refute Enum.any?(beta_records, &(&1.id == alpha_record.id))
+    assert {:ok, alpha_answer} = SimpleMem.ask(reopened_alpha, "Where does Sam Carter live?")
+    assert alpha_answer.answer =~ "Lisbon"
 
-    reopened_alpha = target("agent-alpha", path)
-    reopened_beta = target("agent-beta", path)
-
-    assert {:ok, reopened_alpha_records} =
-             Jido.SimpleMem.retrieve(reopened_alpha, "What does Sam Carter prefer?")
-
-    assert Enum.any?(reopened_alpha_records, &String.contains?(&1.text || "", "Lisbon"))
-    refute Enum.any?(reopened_alpha_records, &String.contains?(&1.text || "", "Oslo"))
-
-    assert {:ok, reopened_beta_records} =
-             Jido.SimpleMem.retrieve(reopened_beta, "What does Sam Carter prefer?")
-
-    assert Enum.any?(reopened_beta_records, &String.contains?(&1.text || "", "Oslo"))
-    refute Enum.any?(reopened_beta_records, &String.contains?(&1.text || "", "Lisbon"))
-
-    assert {:ok, true} = Jido.SimpleMem.forget(reopened_alpha, alpha_record.id)
-
-    assert {:ok, alpha_after_forget} = Jido.SimpleMem.retrieve(reopened_alpha, "Sam Carter")
-    refute Enum.any?(alpha_after_forget, &(&1.id == alpha_record.id))
-
-    assert {:ok, beta_after_forget} = Jido.SimpleMem.retrieve(reopened_beta, "Sam Carter")
-    assert Enum.any?(beta_after_forget, &(&1.id == beta_record.id))
-  end
-
-  defp target(agent_id, path) do
-    state = %{
-      namespace: "agent:" <> agent_id,
-      store: {SQLite, [path: path]},
-      store_opts: [path: path],
-      llm_client: Jido.SimpleMem.LLMClient.Noop,
-      llm_client_opts: [],
-      embedding_client: Jido.SimpleMem.TestSupport.FakeEmbeddingClient,
-      embedding_client_opts: [],
-      retrieval_limit: 5,
-      context_token_budget: 1200,
-      reflection_enabled: true,
-      max_reflection_rounds: 2
-    }
-
-    %{id: agent_id, state: %{__simplemem__: state}}
+    assert {:ok, beta_answer} = SimpleMem.ask(reopened_beta, "What does Sam Carter prefer?")
+    assert beta_answer.answer =~ "tea"
   end
 end

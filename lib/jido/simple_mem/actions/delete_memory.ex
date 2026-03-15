@@ -1,9 +1,9 @@
-defmodule Jido.SimpleMem.Actions.Forget do
+defmodule Jido.SimpleMem.Actions.DeleteMemory do
   @moduledoc false
 
   use Jido.Action,
-    name: "simplemem_forget",
-    description: "Delete a SimpleMem record",
+    name: "simplemem_delete_memory",
+    description: "Delete a stored SimpleMem memory by id",
     schema: [
       id: [type: :string, required: true],
       memory_result_key: [type: :any, required: false]
@@ -11,7 +11,9 @@ defmodule Jido.SimpleMem.Actions.Forget do
 
   @impl true
   def run(params, context) do
-    case Jido.SimpleMem.forget(context, params.id, []) do
+    target = Map.get(context, :agent, context)
+
+    case Jido.SimpleMem.delete_memory(target, params.id, []) do
       {:ok, deleted?} ->
         key = params[:memory_result_key] || :last_memory_deleted?
         {:ok, %{key => deleted?}}

@@ -1,20 +1,20 @@
-require Jido.SimpleMem.Actions.Answer
-require Jido.SimpleMem.Actions.Forget
+require Jido.SimpleMem.Actions.Ask
+require Jido.SimpleMem.Actions.DeleteMemory
+require Jido.SimpleMem.Actions.Finalize
+require Jido.SimpleMem.Actions.GetAllMemories
 require Jido.SimpleMem.Actions.PostTurn
 require Jido.SimpleMem.Actions.PreTurn
-require Jido.SimpleMem.Actions.Remember
-require Jido.SimpleMem.Actions.Retrieve
 
 defmodule Jido.SimpleMem.Plugin do
   @moduledoc """
-  Single-tier SimpleMem-inspired plugin for Jido agents.
+  Single-tier, buffered SimpleMem plugin for Jido agents.
   """
 
   alias Jido.Signal
-  alias Jido.SimpleMem.Actions.{Answer, Forget, PostTurn, PreTurn, Remember, Retrieve}
-  alias Jido.SimpleMem.{Config, Policy}
+  alias Jido.SimpleMem.Actions.{Ask, DeleteMemory, Finalize, GetAllMemories, PostTurn, PreTurn}
+  alias Jido.SimpleMem.Config
 
-  @default_capture_patterns ["memory.*", "ai.react.query", "ai.llm.response", "ai.tool.result"]
+  @default_capture_patterns ["ai.react.query", "ai.llm.response", "ai.tool.result"]
 
   @state_schema Zoi.object(%{
                   namespace: Zoi.string() |> Zoi.optional(),
@@ -24,11 +24,18 @@ defmodule Jido.SimpleMem.Plugin do
                   llm_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
                   embedding_client: Zoi.any(),
                   embedding_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
-                  memory_policy: Zoi.map() |> Zoi.default(Policy.default_options()),
+                  session_id: Zoi.string() |> Zoi.optional(),
                   auto_capture: Zoi.boolean() |> Zoi.default(true),
                   capture_signal_patterns:
                     Zoi.list(Zoi.string()) |> Zoi.default(@default_capture_patterns),
                   capture_rules: Zoi.map() |> Zoi.default(%{}),
+                  window_size: Zoi.integer() |> Zoi.default(6),
+                  overlap_size: Zoi.integer() |> Zoi.default(2),
+                  enable_parallel_processing: Zoi.boolean() |> Zoi.default(true),
+                  max_parallel_workers: Zoi.integer() |> Zoi.default(4),
+                  enable_parallel_retrieval: Zoi.boolean() |> Zoi.default(true),
+                  max_retrieval_workers: Zoi.integer() |> Zoi.default(4),
+                  enable_planning: Zoi.boolean() |> Zoi.default(true),
                   retrieval_limit: Zoi.integer() |> Zoi.default(10),
                   context_token_budget: Zoi.integer() |> Zoi.default(1200),
                   reflection_enabled: Zoi.boolean() |> Zoi.default(true),
@@ -41,16 +48,23 @@ defmodule Jido.SimpleMem.Plugin do
                    shared_namespace: Zoi.string() |> Zoi.optional(),
                    store: Zoi.any() |> Zoi.optional(),
                    store_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
-                   llm_client: Zoi.any() |> Zoi.default(Jido.SimpleMem.LLMClient.Noop),
+                   llm_client: Zoi.any() |> Zoi.default(Jido.SimpleMem.LLMClient.ReqLLM),
                    llm_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
                    embedding_client:
                      Zoi.any() |> Zoi.default(Jido.SimpleMem.EmbeddingClient.ReqLLM),
                    embedding_client_opts: Zoi.list(Zoi.any()) |> Zoi.default([]),
-                   memory_policy: Zoi.map() |> Zoi.default(Policy.default_options()),
+                   session_id: Zoi.string() |> Zoi.optional(),
                    auto_capture: Zoi.boolean() |> Zoi.default(true),
                    capture_signal_patterns:
                      Zoi.list(Zoi.string()) |> Zoi.default(@default_capture_patterns),
                    capture_rules: Zoi.map() |> Zoi.default(%{}),
+                   window_size: Zoi.integer() |> Zoi.default(6),
+                   overlap_size: Zoi.integer() |> Zoi.default(2),
+                   enable_parallel_processing: Zoi.boolean() |> Zoi.default(true),
+                   max_parallel_workers: Zoi.integer() |> Zoi.default(4),
+                   enable_parallel_retrieval: Zoi.boolean() |> Zoi.default(true),
+                   max_retrieval_workers: Zoi.integer() |> Zoi.default(4),
+                   enable_planning: Zoi.boolean() |> Zoi.default(true),
                    retrieval_limit: Zoi.integer() |> Zoi.default(10),
                    context_token_budget: Zoi.integer() |> Zoi.default(1200),
                    reflection_enabled: Zoi.boolean() |> Zoi.default(true),
@@ -60,14 +74,14 @@ defmodule Jido.SimpleMem.Plugin do
   use Jido.Plugin,
     name: "simplemem",
     state_key: :__simplemem__,
-    actions: [Remember, Retrieve, Answer, Forget, PreTurn, PostTurn],
+    actions: [PreTurn, PostTurn, Finalize, Ask, GetAllMemories, DeleteMemory],
     signal_routes: [
-      {"remember", Remember},
-      {"retrieve", Retrieve},
-      {"answer", Answer},
-      {"forget", Forget},
       {"pre_turn", PreTurn},
-      {"post_turn", PostTurn}
+      {"post_turn", PostTurn},
+      {"finalize", Finalize},
+      {"ask", Ask},
+      {"get_all_memories", GetAllMemories},
+      {"delete_memory", DeleteMemory}
     ],
     schema: @state_schema,
     config_schema: @config_schema,
@@ -89,10 +103,19 @@ defmodule Jido.SimpleMem.Plugin do
        llm_client_opts: config[:llm_client_opts] || defaults.llm_client_opts,
        embedding_client: config[:embedding_client] || defaults.embedding_client,
        embedding_client_opts: config[:embedding_client_opts] || defaults.embedding_client_opts,
-       memory_policy: config[:memory_policy] || defaults.memory_policy,
+       session_id: config[:session_id] || agent_id!(agent),
        auto_capture: Map.get(config, :auto_capture, true),
        capture_signal_patterns: config[:capture_signal_patterns] || @default_capture_patterns,
        capture_rules: config[:capture_rules] || %{},
+       window_size: config[:window_size] || defaults.window_size,
+       overlap_size: config[:overlap_size] || defaults.overlap_size,
+       enable_parallel_processing:
+         Map.get(config, :enable_parallel_processing, defaults.enable_parallel_processing),
+       max_parallel_workers: config[:max_parallel_workers] || defaults.max_parallel_workers,
+       enable_parallel_retrieval:
+         Map.get(config, :enable_parallel_retrieval, defaults.enable_parallel_retrieval),
+       max_retrieval_workers: config[:max_retrieval_workers] || defaults.max_retrieval_workers,
+       enable_planning: Map.get(config, :enable_planning, defaults.enable_planning),
        retrieval_limit: config[:retrieval_limit] || defaults.retrieval_limit,
        context_token_budget: config[:context_token_budget] || defaults.context_token_budget,
        reflection_enabled: Map.get(config, :reflection_enabled, defaults.reflection_enabled),
@@ -103,12 +126,12 @@ defmodule Jido.SimpleMem.Plugin do
   @impl Jido.Plugin
   def signal_routes(_config) do
     [
-      {"remember", Remember},
-      {"retrieve", Retrieve},
-      {"answer", Answer},
-      {"forget", Forget},
       {"pre_turn", PreTurn},
-      {"post_turn", PostTurn}
+      {"post_turn", PostTurn},
+      {"finalize", Finalize},
+      {"ask", Ask},
+      {"get_all_memories", GetAllMemories},
+      {"delete_memory", DeleteMemory}
     ]
   end
 
@@ -128,15 +151,7 @@ defmodule Jido.SimpleMem.Plugin do
         )
 
     if should_capture do
-      case Policy.signal_capture(signal, state) do
-        {:remember, memories} ->
-          Enum.each(memories, fn attrs ->
-            _ = Jido.SimpleMem.remember(Map.get(context, :agent, %{}), attrs, [])
-          end)
-
-        {:skip, _reason} ->
-          :ok
-      end
+      maybe_capture_signal(signal, context, state)
     end
 
     {:ok, :continue}
@@ -150,6 +165,41 @@ defmodule Jido.SimpleMem.Plugin do
   @impl Jido.Plugin
   def on_restore(pointer, _context) when is_map(pointer), do: {:ok, pointer}
   def on_restore(_pointer, _context), do: {:ok, nil}
+
+  defp maybe_capture_signal(%Signal{} = signal, context, state) do
+    dialogue =
+      case signal.type do
+        "ai.react.query" ->
+          %{
+            speaker: "user",
+            content: signal.data[:query] || signal.data["query"] || inspect(signal.data)
+          }
+
+        "ai.llm.response" ->
+          %{
+            speaker: "assistant",
+            content: signal.data[:text] || signal.data["text"] || inspect(signal.data)
+          }
+
+        "ai.tool.result" ->
+          %{
+            speaker: "tool",
+            content: signal.data[:result] || signal.data["result"] || inspect(signal.data)
+          }
+
+        _ ->
+          nil
+      end
+
+    if is_map(dialogue) do
+      _ =
+        Jido.SimpleMem.enqueue_add_dialogues(
+          Map.get(context, :agent, %{}),
+          [Map.put(dialogue, :metadata, %{"signal_type" => signal.type})],
+          session_id: state[:session_id]
+        )
+    end
+  end
 
   defp signal_matches_any?(_type, []), do: false
 
@@ -184,7 +234,7 @@ defmodule Jido.SimpleMem.Plugin do
   end
 
   defp agent_id!(agent) do
-    case agent[:id] do
+    case Map.get(agent, :id) do
       id when is_binary(id) and id != "" -> id
       _ -> raise ArgumentError, "agent id required for per_agent namespace"
     end

@@ -1,105 +1,139 @@
 defmodule Jido.SimpleMem.PluginTest do
   use ExUnit.Case, async: true
 
-  alias Jido.SimpleMem.Actions.{Answer, PostTurn, PreTurn, Remember, Retrieve}
+  alias Jido.Memory.Record
   alias Jido.SimpleMem.Plugin
-  alias Jido.SimpleMem.Store.{InMemory, SQLite}
+  alias Jido.SimpleMem.TestSupport.{Factory, FakeEmbeddingClient, FakeLLMClient}
+  alias Jido.Signal
 
-  setup do
-    table = String.to_atom("jido_simplemem_plugin_#{System.unique_integer([:positive])}")
-    assert :ok = InMemory.ensure_ready(table: table)
-    %{table: table}
+  defmodule PluginFlowLLMClient do
+    @behaviour Jido.SimpleMem.LLMClient
+
+    @impl true
+    def extract_window(dialogues, previous_entries, opts),
+      do: FakeLLMClient.extract_window(dialogues, previous_entries, opts)
+
+    @impl true
+    def synthesize(entries, previous_entries, opts),
+      do: FakeLLMClient.synthesize(entries, previous_entries, opts)
+
+    @impl true
+    def plan(%{question: question}, _opts) do
+      {:ok,
+       %{
+        "required_info" => [question],
+        "search_queries" => [
+          %{
+            "query" => "Jamie Lee",
+            "keywords" => ["jamie", "lee", "jasmine", "tea", "prefer"],
+            "persons" => ["Jamie Lee"],
+            "entities" => []
+          }
+        ],
+        "keywords" => ["jamie", "lee", "jasmine", "tea", "prefer"],
+        "persons" => ["Jamie Lee"],
+        "entities" => [],
+        "question_type" => "entity"
+       }}
+    end
+
+    @impl true
+    def reflect(_question, _records, _plan, _opts) do
+      {:ok, %{"status" => "complete", "additional_queries" => []}}
+    end
+
+    @impl true
+    def answer(_question, [%Record{text: text} | _], _opts) do
+      {:ok, %{answer: text, reasoning: "Selected matching record.", confidence: 0.9, context: text}}
+    end
+
+    def answer(_question, [], _opts) do
+      {:ok, %{answer: "No relevant information found", reasoning: "No records matched.", confidence: 0.0, context: ""}}
+    end
   end
 
-  test "mount resolves per-agent namespace and store", %{table: table} do
-    assert {:ok, state} =
-             Plugin.mount(%{id: "agent-1"}, %{
-               store: {InMemory, [table: table]},
-               store_opts: [table: table]
-             })
-
-    assert state.namespace == "agent:agent-1"
-    assert state.store == {InMemory, [table: table]}
-  end
-
-  test "mount defaults to local sqlite when no store is configured" do
-    assert {:ok, state} = Plugin.mount(%{id: "agent-default"}, %{})
-
-    assert state.namespace == "agent:agent-default"
-    assert {SQLite, opts} = state.store
-    assert is_binary(opts[:path])
-    assert state.embedding_client == Jido.SimpleMem.EmbeddingClient.ReqLLM
-  end
-
-  test "signal routes expose explicit plugin actions" do
+  test "signal routes expose only the parity actions" do
     routes = Plugin.signal_routes(%{})
-    assert {"remember", Remember} in routes
-    assert {"retrieve", Retrieve} in routes
-    assert {"answer", Answer} in routes
+
+    assert {"pre_turn", Jido.SimpleMem.Actions.PreTurn} in routes
+    assert {"post_turn", Jido.SimpleMem.Actions.PostTurn} in routes
+    assert {"finalize", Jido.SimpleMem.Actions.Finalize} in routes
+    assert {"ask", Jido.SimpleMem.Actions.Ask} in routes
+    assert {"get_all_memories", Jido.SimpleMem.Actions.GetAllMemories} in routes
+    assert {"delete_memory", Jido.SimpleMem.Actions.DeleteMemory} in routes
+
+    refute Enum.any?(routes, fn {name, _mod} ->
+             name in ["remember", "retrieve", "answer", "forget"]
+           end)
   end
 
-  test "handle_signal auto-captures explicit memory instructions", %{table: table} do
-    {:ok, plugin_state} =
-      Plugin.mount(%{id: "agent-cap"}, %{
-        store: {InMemory, [table: table]},
-        store_opts: [table: table],
-        embedding_client: Jido.SimpleMem.TestSupport.FakeEmbeddingClient,
-        capture_signal_patterns: ["ai.react.query"]
-      })
+  test "plugin mount defaults to the Lance store" do
+    agent = %{id: "plugin-agent"}
+    assert {:ok, state} = Plugin.mount(agent, %{})
+    assert {Jido.SimpleMem.Store.Lance, _opts} = state.store
+  end
 
-    agent = %{id: "agent-cap", state: %{__simplemem__: plugin_state}}
-    context = %{agent: agent}
-
-    signal =
-      Jido.Signal.new!(
-        "ai.react.query",
-        %{query: "Remember that I prefer aisle seats."},
-        source: "/ai"
+  test "pre_turn/post_turn/finalize and signal auto-capture work with plugin state" do
+    target =
+      Factory.target("plugin-flow",
+        llm_client: PluginFlowLLMClient,
+        embedding_client: FakeEmbeddingClient,
+        window_size: 2,
+        overlap_size: 1
       )
 
+    context = %{agent: target}
+
+    assert {:ok, %{queued?: true, job_id: post_turn_job_id}} =
+              Jido.SimpleMem.Actions.PostTurn.run(
+                %{user_input: "Jamie Lee prefers jasmine tea", assistant_response: "Noted."},
+                context
+              )
+
+    assert {:ok, %{status: status}} = Jido.SimpleMem.job_status(post_turn_job_id)
+    assert status in [:running, :completed]
+
+    assert {:ok, {:ok, %{memory_count: 1, buffer_remaining: 1}}} =
+             Jido.SimpleMem.await_job(post_turn_job_id)
+
+    assert {:ok, %{queued?: true, job_id: finalize_job_id}} =
+             Jido.SimpleMem.Actions.Finalize.run(%{}, context)
+
+    assert {:ok, {:ok, %{memory_count: 0, buffer_remaining: 0, last_memory_id: nil, memory_ids: []}}} =
+             Jido.SimpleMem.await_job(finalize_job_id)
+
+    assert {:ok, %{status: :completed}} = Jido.SimpleMem.job_status(finalize_job_id)
+
+    assert {:ok, memories} = Jido.SimpleMem.get_all_memories(target)
+    assert Enum.any?(memories, &String.contains?((&1.text || ""), "Jamie Lee prefers jasmine tea"))
+
+    assert {:ok, %{simplemem_context: _context, memory_results: _results, memory_answer: _answer}} =
+             Jido.SimpleMem.Actions.PreTurn.run(%{user_input: "What does Jamie Lee prefer?"}, context)
+
+    signal =
+      %Signal{
+        id: "sig-1",
+        type: "ai.react.query",
+        source: "test",
+        data: %{query: "I live in Berlin"}
+      }
+
     assert {:ok, :continue} = Plugin.handle_signal(signal, context)
-    assert {:ok, records} = Jido.SimpleMem.retrieve(agent, "What does the user prefer?")
-    assert Enum.any?(records, &(&1.text =~ "aisle seats"))
+    assert {:ok, %{memory_count: 1}} = eventually_finalize(context)
   end
 
-  test "handle_signal skips ephemeral queries by default", %{table: table} do
-    {:ok, plugin_state} =
-      Plugin.mount(%{id: "agent-skip"}, %{
-        store: {InMemory, [table: table]},
-        store_opts: [table: table],
-        embedding_client: Jido.SimpleMem.TestSupport.FakeEmbeddingClient,
-        capture_signal_patterns: ["ai.react.query"]
-      })
+  defp eventually_finalize(context, attempts \\ 10)
 
-    agent = %{id: "agent-skip", state: %{__simplemem__: plugin_state}}
-    context = %{agent: agent}
-    signal = Jido.Signal.new!("ai.react.query", %{query: "what happened?"}, source: "/ai")
+  defp eventually_finalize(context, attempts) when attempts > 0 do
+    case Jido.SimpleMem.Actions.Finalize.run(%{await: true}, context) do
+      {:ok, %{memory_count: 1} = result} ->
+        {:ok, result}
 
-    assert {:ok, :continue} = Plugin.handle_signal(signal, context)
-    assert {:ok, records} = Jido.SimpleMem.retrieve(agent, "what happened?")
-    assert records == []
+      _ ->
+        Process.sleep(10)
+        eventually_finalize(context, attempts - 1)
+    end
   end
 
-  test "pre_turn and post_turn actions work with plugin-mounted state", %{table: table} do
-    {:ok, plugin_state} =
-      Plugin.mount(%{id: "agent-actions"}, %{
-        store: {InMemory, [table: table]},
-        store_opts: [table: table],
-        embedding_client: Jido.SimpleMem.TestSupport.FakeEmbeddingClient
-      })
-
-    agent = %{id: "agent-actions", state: %{__simplemem__: plugin_state}}
-
-    assert {:ok, %{last_memory_id: _}} =
-             PostTurn.run(
-               %{text: "Alice prefers bullet points", tags: ["persona:style"]},
-               agent
-             )
-
-    assert {:ok, %{simplemem_context: context_text, memory_results: records}} =
-             PreTurn.run(%{question: "What does Alice prefer?"}, agent)
-
-    assert context_text =~ "Alice"
-    assert length(records) >= 1
-  end
+  defp eventually_finalize(_context, 0), do: {:error, :finalize_timeout}
 end

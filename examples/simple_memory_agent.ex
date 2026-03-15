@@ -1,61 +1,91 @@
 defmodule Jido.SimpleMem.Examples.SimpleMemoryAgent do
   @moduledoc """
-  Minimal Jido agent showing how to use `Jido.SimpleMem.Plugin`.
+  Minimal Jido agent showing the passive SimpleMem chat workflow.
 
-  The agent keeps memory result metadata in its root state while actual memory
-  records live in the configured SimpleMem store.
+  The agent retrieves memory before replying, appends dialogue after replying,
+  and relies on `finalize` to flush incomplete trailing windows.
   """
 
-  alias Jido.SimpleMem.Actions.{Answer, Forget, Remember, Retrieve}
+  alias Jido.SimpleMem.Actions.{Ask, Finalize, PostTurn, PreTurn}
 
   use Jido.Agent,
     name: "simple_memory_agent",
-    description: "Example agent that stores, queries, answers, and forgets memory",
+    description: "Example agent that chats with passive pre/post turn memory hooks",
     schema: [
-      last_memory_id: [type: :string, default: nil],
-      memory_results: [type: :any, default: []],
+      last_user_input: [type: :string, default: nil],
+      last_response: [type: :string, default: nil],
       memory_answer: [type: :string, default: nil],
       memory_context: [type: :string, default: nil],
-      last_memory_deleted?: [type: :boolean, default: false]
+      buffer_remaining: [type: :integer, default: 0]
     ],
     plugins: [
       {Jido.SimpleMem.Plugin,
        %{
-         auto_capture: false,
-         capture_signal_patterns: []
+         window_size: 4,
+         overlap_size: 1
        }}
     ]
 
-  @spec remember(Jido.Agent.t(), String.t(), map()) ::
-          {:ok, Jido.Agent.t(), String.t() | nil}
-  def remember(agent, text, attrs \\ %{}) when is_binary(text) and is_map(attrs) do
-    params = Map.merge(attrs, %{text: text})
-    {updated_agent, _directives} = cmd(agent, {Remember, params})
-    {:ok, updated_agent, updated_agent.state.last_memory_id}
+  @spec chat(Jido.Agent.t(), String.t()) :: {:ok, Jido.Agent.t(), String.t()}
+  def chat(agent, user_input) when is_binary(user_input) do
+    {pre_turn_agent, _directives} =
+      cmd(
+        agent,
+        {PreTurn,
+         %{
+           user_input: user_input,
+           context_result_key: :memory_context
+         }}
+      )
+
+    {asked_agent, _directives} =
+      cmd(pre_turn_agent, {Ask, %{question: user_input, answer_result_key: :memory_answer}})
+
+    response =
+      build_response(
+        user_input,
+        asked_agent.state.memory_answer,
+        asked_agent.state.memory_context
+      )
+
+    {updated_agent, _directives} =
+      cmd(
+        asked_agent,
+        {PostTurn,
+         %{
+           user_input: user_input,
+           assistant_response: response
+         }}
+      )
+
+    updated_agent = put_in(updated_agent.state.last_user_input, user_input)
+    updated_agent = put_in(updated_agent.state.last_response, response)
+
+    {:ok, updated_agent, response}
   end
 
-  @spec query(Jido.Agent.t(), String.t(), map()) ::
-          {:ok, Jido.Agent.t(), [Jido.Memory.Record.t()]}
-  def query(agent, question, attrs \\ %{}) when is_binary(question) and is_map(attrs) do
-    params =
-      attrs
-      |> Map.merge(%{question: question})
-      |> Map.put(:memory_result_key, :memory_results)
-
-    {updated_agent, _directives} = cmd(agent, {Retrieve, params})
-    {:ok, updated_agent, updated_agent.state.memory_results || []}
+  @spec finalize_memory(Jido.Agent.t()) :: {:ok, Jido.Agent.t(), non_neg_integer()}
+  def finalize_memory(agent) do
+    {updated_agent, _directives} = cmd(agent, {Finalize, %{}})
+    {:ok, updated_agent, updated_agent.state.memory_count || 0}
   end
 
-  @spec answer_from_memory(Jido.Agent.t(), String.t()) ::
-          {:ok, Jido.Agent.t(), String.t() | nil}
-  def answer_from_memory(agent, question) when is_binary(question) do
-    {updated_agent, _directives} = cmd(agent, {Answer, %{question: question}})
-    {:ok, updated_agent, updated_agent.state.memory_answer}
+  defp build_response(_user_input, memory_answer, memory_context) do
+    cond do
+      useful_memory_answer?(memory_answer) ->
+        memory_answer
+
+      present_text?(memory_context) ->
+        "I found some related memory context, but not a precise answer yet."
+
+      true ->
+        "I don't have that in memory yet, but I can learn it from future turns."
+    end
   end
 
-  @spec forget(Jido.Agent.t(), String.t()) :: {:ok, Jido.Agent.t(), boolean()}
-  def forget(agent, memory_id) when is_binary(memory_id) do
-    {updated_agent, _directives} = cmd(agent, {Forget, %{id: memory_id}})
-    {:ok, updated_agent, updated_agent.state.last_memory_deleted?}
+  defp useful_memory_answer?(answer) do
+    present_text?(answer) and answer != "No relevant information found"
   end
+
+  defp present_text?(value), do: is_binary(value) and String.trim(value) != ""
 end
