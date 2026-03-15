@@ -60,7 +60,6 @@ defmodule Jido.SimpleMem.Config do
 
     []
     |> maybe_put(:model, model)
-    |> maybe_put(:dimensions, embedding_dimensions())
     |> maybe_put(:api_key, explicit_api_key())
     |> maybe_put(:receive_timeout, request_receive_timeout())
     |> maybe_put(:req_http_options, request_http_options())
@@ -88,7 +87,6 @@ defmodule Jido.SimpleMem.Config do
   @spec default_worker_opts() :: keyword()
   def default_worker_opts do
     []
-    |> maybe_put_integer(:vector_dimensions, embedding_dimensions())
     |> maybe_put(:uv_executable, System.get_env("JIDO_SIMPLEMEM_UV_EXECUTABLE"))
     |> maybe_put(:python_executable, System.get_env("JIDO_SIMPLEMEM_PYTHON_EXECUTABLE"))
     |> maybe_put_integer(
@@ -178,19 +176,6 @@ defmodule Jido.SimpleMem.Config do
 
       _ ->
         default
-    end
-  end
-
-  defp embedding_dimensions do
-    case System.get_env("JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS") do
-      value when is_binary(value) and value != "" ->
-        case Integer.parse(value) do
-          {parsed, ""} when parsed > 0 -> parsed
-          _ -> nil
-        end
-
-      _ ->
-        nil
     end
   end
 end

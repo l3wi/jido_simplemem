@@ -44,7 +44,6 @@ defmodule Jido.SimpleMem.ConfigTest do
     System.put_env("JIDO_SIMPLEMEM_BASE_URL", "https://custom.example.com/v1")
     System.put_env("JIDO_SIMPLEMEM_LLM_MODEL", "openai/gpt-5-mini")
     System.put_env("JIDO_SIMPLEMEM_EMBEDDING_MODEL", "openai/text-embedding-3-small")
-    System.put_env("JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS", "1024")
     System.put_env("JIDO_SIMPLEMEM_API_KEY", "test-endpoint-key")
     System.put_env("JIDO_SIMPLEMEM_RECEIVE_TIMEOUT_MS", "300000")
     System.put_env("JIDO_SIMPLEMEM_POOL_TIMEOUT_MS", "300000")
@@ -54,7 +53,7 @@ defmodule Jido.SimpleMem.ConfigTest do
 
     assert llm_opts[:api_key] == "test-endpoint-key"
     assert embedding_opts[:api_key] == "test-endpoint-key"
-    assert embedding_opts[:dimensions] == 1024
+    refute Keyword.has_key?(embedding_opts, :dimensions)
     assert llm_opts[:receive_timeout] == 300_000
     assert llm_opts[:req_http_options][:pool_timeout] == 300_000
 
@@ -76,7 +75,6 @@ defmodule Jido.SimpleMem.ConfigTest do
     System.put_env("JIDO_SIMPLEMEM_UV_EXECUTABLE", "/opt/homebrew/bin/uv")
     System.put_env("JIDO_SIMPLEMEM_PYTHON_EXECUTABLE", "/usr/bin/python3")
     System.put_env("JIDO_SIMPLEMEM_WORKER_START_TIMEOUT_MS", "90000")
-    System.put_env("JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS", "1536")
 
     {Lance, opts} = Config.default_store()
 
@@ -84,6 +82,6 @@ defmodule Jido.SimpleMem.ConfigTest do
     assert opts[:uv_executable] == "/opt/homebrew/bin/uv"
     assert opts[:python_executable] == "/usr/bin/python3"
     assert opts[:worker_start_timeout_ms] == 90_000
-    assert opts[:vector_dimensions] == 1536
+    refute Keyword.has_key?(opts, :vector_dimensions)
   end
 end

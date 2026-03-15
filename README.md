@@ -1,19 +1,123 @@
 # Jido.SimpleMem
 
-`jido_simplemem` is a LanceDB-backed, LLM-first memory system for Jido agents.
-It is designed to track upstream core SimpleMem behavior more closely than the
-earlier CRUD-style plugin shape:
+`jido_simplemem` is a developer-focused SimpleMem-style memory plugin and
+runtime for [Jido](https://github.com/agentjido/jido) agents.
 
-- dialogue is buffered by session instead of written immediately
-- overlapping windows are compressed into standalone memory units
-- retrieval is planned by an LLM and executed as hybrid search
-- reflection can issue follow-up queries when the first pass is insufficient
-- answers are synthesized from retrieved memory context
+It is built around the same core ideas as upstream
+[SimpleMem](https://github.com/aiming-lab/SimpleMem): buffered dialogue
+ingestion, semantic compression, synthesis, and intent-aware retrieval. This
+package adapts that model to the Jido plugin/action lifecycle and to an Elixir
+runtime backed by [LanceDB](https://github.com/lancedb/lancedb). The default
+runtime path uses
+[jido_action](https://github.com/agentjido/jido_action),
+[jido_memory](https://github.com/agentjido/jido_memory), and
+[ReqLLM](https://github.com/agentjido/req_llm).
+
+At a glance:
+
+- `Jido.SimpleMem.Plugin` gives Jido agents passive memory hooks
+- `Jido.SimpleMem` exposes the buffered lifecycle directly
 - LanceDB is the only storage and indexing backend
+- retrieval is hybrid and LLM-planned
 
-## Public API
+## What This Package Is
 
-`Jido.SimpleMem` exposes the buffered lifecycle directly:
+Use this package when you want a Jido agent to:
+
+- accumulate dialogue in windows instead of writing every turn immediately
+- compress overlapping turns into standalone long-term memories
+- ask grounded follow-up questions against stored memory
+- inspect, explain, and delete stored memories directly
+
+This package is not a generic multi-backend memory abstraction. It is a
+single-tier, LanceDB-backed runtime with a SimpleMem-style workflow.
+
+## Quick Start
+
+The main integration path is the plugin.
+
+```elixir
+defmodule MyApp.MemoryAgent do
+  alias Jido.SimpleMem.Actions.{Finalize, PostTurn, PreTurn}
+
+  use Jido.Agent,
+    name: "memory_agent",
+    plugins: [
+      {Jido.SimpleMem.Plugin,
+       %{
+         window_size: 4,
+         overlap_size: 1
+       }}
+    ]
+
+  def chat(agent, user_input) do
+    {agent, _} =
+      cmd(agent, {PreTurn, %{user_input: user_input, context_result_key: :memory_context}})
+
+    response = build_response(user_input, agent.state.memory_context)
+
+    {agent, _} =
+      cmd(agent, {PostTurn, %{user_input: user_input, assistant_response: response}})
+
+    {:ok, agent, response}
+  end
+
+  def flush(agent) do
+    {agent, _} = cmd(agent, {Finalize, %{}})
+    {:ok, agent}
+  end
+
+  defp build_response(_user_input, memory_context) do
+    if is_binary(memory_context) and memory_context != "" do
+      "I found relevant memory context."
+    else
+      "I don't have anything in memory yet."
+    end
+  end
+end
+```
+
+Required environment:
+
+```bash
+export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-5-mini"
+export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
+export OPENAI_API_KEY="..."
+```
+
+Embedding dimensions are inferred. Keep one embedding size per Lance store. If
+you switch to an embedding model with a different vector size, clear the store
+or re-embed the existing data first.
+
+If you want a runnable example, see
+[examples/simple_memory_agent.ex](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/examples/simple_memory_agent.ex)
+and
+[examples/simple_memory_demo.exs](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/examples/simple_memory_demo.exs).
+
+## Public Surfaces
+
+### Plugin
+
+`Jido.SimpleMem.Plugin` exposes these actions:
+
+- `pre_turn`
+- `post_turn`
+- `finalize`
+- `ask`
+- `get_all_memories`
+- `delete_memory`
+
+Recommended flow:
+
+1. Call `pre_turn` before generating a response.
+2. Add the returned memory context to your model prompt.
+3. Generate the assistant response.
+4. Call `post_turn` with the user input and assistant response.
+5. Call `finalize` at session end or before switching `session_id`.
+
+### Direct Runtime API
+
+`Jido.SimpleMem` exposes the same lifecycle without going through a plugin:
 
 - `add_dialogue/4`
 - `add_dialogues/3`
@@ -23,149 +127,102 @@ earlier CRUD-style plugin shape:
 - `delete_memory/3`
 - `explain/3`
 
-The old compatibility facade methods were removed.
-
-## Runtime Model
-
-The default runtime is buffered and LLM-first.
-
-1. `post_turn` or `add_dialogue/4` appends dialogue events to a persisted
-   session buffer.
-2. Once a window fills, `MemoryBuilder` sends that window to the configured
-   LLM extraction prompt.
-3. The LLM emits one or more structured memory entries with resolved
-   coreference, standalone restatements, and explicit metadata.
-4. A second LLM synthesis pass consolidates related entries while preserving
-   complete coverage.
-5. `Extractor` normalizes the synthesized entries into memory units.
-6. LanceDB persists the resulting memory entries and indexes them for semantic,
-   keyword, and symbolic retrieval.
-7. `ask/3` uses LLM-planned hybrid retrieval plus optional reflection rounds.
-8. `Answerer` synthesizes a grounded answer from the selected records.
-
-## Core API Example
+Example:
 
 ```elixir
 {:ok, _} =
   Jido.SimpleMem.add_dialogues(agent, [
     %{speaker: "user", content: "My name is Alice Chen"},
-    %{speaker: "assistant", content: "Nice to meet you, Alice."},
-    %{speaker: "user", content: "I live in Portland and prefer concise answers"}
+    %{speaker: "user", content: "I live in Portland"},
+    %{speaker: "user", content: "I prefer concise answers"}
   ])
 
 {:ok, _} = Jido.SimpleMem.finalize(agent)
-
-{:ok, answer} = Jido.SimpleMem.ask(agent, "Where does Alice Chen live?")
-{:ok, memories} = Jido.SimpleMem.get_all_memories(agent)
+{:ok, result} = Jido.SimpleMem.ask(agent, "Where does Alice Chen live?")
 ```
 
-`add_dialogues/3` buffers. It may return `memory_count: 0` until the configured
-window fills or `finalize/2` is called.
+## How The Package Works
 
-## Jido Plugin Workflow
+The default runtime is buffered and LLM-first:
 
-Mount the plugin on a Jido agent:
+1. Dialogue is appended to a persisted session buffer.
+2. Once a window fills, the builder sends that window to the configured LLM.
+3. The LLM extracts structured memory candidates.
+4. A synthesis pass consolidates overlapping facts within the current session.
+5. Extracted entries are normalized into `MemoryUnit` structs.
+6. LanceDB persists those units and indexes them for semantic, lexical, and structured retrieval.
+7. `ask/3` plans retrieval with the LLM, executes hybrid search, and can run reflection rounds.
+8. `Answerer` produces a grounded answer from the selected records.
 
-```elixir
-plugins: [
-  {Jido.SimpleMem.Plugin,
-   %{
-     window_size: 6,
-     overlap_size: 2
-   }}
-]
-```
+Important behavior:
 
-Recommended hook pattern:
+- writes are buffered, not immediate
+- `finalize` is still caller-controlled
+- `tokens_before_finalize` is a helper, not a replacement for explicit flushes
+- plugin auto-capture uses the same ingestion path as direct writes
+- auto-capture failures are logged, emitted via telemetry, and returned as typed plugin errors
 
-1. Call `pre_turn` with the incoming user message.
-2. Add the returned memory context to the model prompt.
-3. Generate the assistant response.
-4. Call `post_turn` with `user_input` and `assistant_response`.
-5. Call `finalize` when you want to flush an incomplete trailing window.
+## Repository Layout
 
-`post_turn` appends dialogue to the active session buffer. Memory admission is
-decided by the LLM-backed builder, not by regex heuristics.
+The repository is organized by subsystem:
 
-Signal auto-capture runs through the same runtime path as direct ingestion. If
-auto-capture fails, the plugin now logs the failure, emits telemetry, and
-returns a typed plugin error instead of silently continuing.
+- [lib/jido/simple_mem/domain](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/domain): core data structures such as `Dialogue`, `MemoryUnit`, and embedding helpers
+- [lib/jido/simple_mem/pipeline](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/pipeline): extraction, synthesis, planning, retrieval, explanation, and answer generation
+- [lib/jido/simple_mem/runtime](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/runtime): shared runtime/config resolution, supervision, and job handling
+- [lib/jido/simple_mem/plugin](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/plugin): plugin integration and Jido actions
+- [lib/jido/simple_mem/store](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/store): LanceDB storage adapter and Python worker bridge
+- [test/support](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/test/support): test fixtures, fake clients, and target builders
+- [examples](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/examples): minimal agent/demo flows
 
-`finalize` remains caller-controlled. `Jido.SimpleMem.Plugin` does not hook
-into Jido server shutdown directly because that would cross the plugin boundary
-into runtime lifecycle management. In practice, call `finalize`:
-
-- at chat or session end
-- before shutdown or checkpoint
-- before switching `session_id` or namespace
-- on idle-time flush boundaries
-
-The plugin can reduce the need for explicit flushes with
-`tokens_before_finalize`, which auto-finalizes when the buffered tail crosses a
-percentage of `context_token_budget`, but explicit session-end `finalize`
-should still be part of the application flow.
-
-This matches upstream SimpleMem core more closely: core usage expects the
-caller to invoke `finalize()` explicitly after dialogue ingestion, while the
-cross-session layer handles finalization during session-stop orchestration.
-
-## Storage
+## Storage And Runtime Notes
 
 LanceDB is the only backend.
 
-The package runs a small local Python worker over `Port` because there is no
-official Elixir LanceDB SDK. That worker uses the official Python LanceDB SDK
-for:
+Because there is no official Elixir LanceDB SDK, the package runs a supervised
+Python worker over `Port`. That worker is responsible for:
 
-- durable memory entry storage
+- durable memory storage
 - durable session buffer storage
-- semantic vector search
-- Tantivy-backed FTS keyword search
+- vector search
+- Tantivy-backed keyword search
 - structured metadata filtering
 
-By default the local LanceDB directory is `.jido/simplemem.lance`. Override it
-with `JIDO_SIMPLEMEM_LANCE_PATH`.
+Default store path:
 
-The store uses one pinned embedding dimension for the entire index. Set
-`JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS` and keep it stable for both writes and
-queries. If you change embedding dimensions later, use a fresh Lance path or
-re-embed the existing store.
+```bash
+export JIDO_SIMPLEMEM_LANCE_PATH=".jido/simplemem.lance"
+```
+
+The embedding dimension is pinned per store. You can switch embedding models,
+but not between models with different vector sizes against the same Lance store
+without clearing or re-embedding that store.
 
 ## Configuration
 
-Important runtime settings:
+Common runtime settings:
 
 - `window_size`
 - `overlap_size`
 - `enable_parallel_retrieval`
 - `max_retrieval_workers`
-- `reflection_enabled`
-- `max_reflection_rounds`
 - `retrieval_limit`
 - `context_token_budget`
 - `tokens_before_finalize`
+- `reflection_enabled`
+- `max_reflection_rounds`
 - `session_id`
 - `namespace`
 - `store` and `store_opts`
 - `llm_client` and `llm_client_opts`
 - `embedding_client` and `embedding_client_opts`
 
-The default clients are strict `ReqLLM` adapters. Runtime startup fails when
-the required models or provider API keys are missing.
-
-### Environment Variables
-
-Required:
+Required environment variables:
 
 - `JIDO_SIMPLEMEM_LLM_MODEL`
 - `JIDO_SIMPLEMEM_EMBEDDING_MODEL`
-- `JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS`
-- provider API key env vars for those models, for example:
-  - `OPENAI_API_KEY`
-  - `ANTHROPIC_API_KEY`
-  - `GOOGLE_API_KEY`
+- provider API key env vars for the configured models, such as `OPENAI_API_KEY`
 
-Optional:
+Optional environment variables:
 
 - `JIDO_SIMPLEMEM_EXTRACTION_MODEL`
 - `JIDO_SIMPLEMEM_PLANNING_MODEL`
@@ -181,63 +238,45 @@ Optional:
 - `JIDO_SIMPLEMEM_WORKER_START_TIMEOUT_MS`
 - `JIDO_SIMPLEMEM_ENABLE_LIVE_LANCE_TESTS`
 
-If the extraction, planning, synthesis, or answer models are omitted, the
-package falls back to `JIDO_SIMPLEMEM_LLM_MODEL`.
+If stage-specific models are not set, they fall back to
+`JIDO_SIMPLEMEM_LLM_MODEL`.
 
-### Direct OpenAI Example
-
-```bash
-export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-5-mini"
-export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
-export JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS="1536"
-export OPENAI_API_KEY="..."
-```
-
-### OpenAI-Compatible Endpoint Example
-
-If you want to route requests through a custom OpenAI-compatible endpoint, set:
+For a custom OpenAI-compatible endpoint:
 
 ```bash
 export JIDO_SIMPLEMEM_BASE_URL="https://your-endpoint.example.com/v1"
 export JIDO_SIMPLEMEM_API_KEY="..."
 export JIDO_SIMPLEMEM_LLM_MODEL="openai/gpt-5-mini"
 export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai/text-embedding-3-small"
-export JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS="1536"
-export JIDO_SIMPLEMEM_RECEIVE_TIMEOUT_MS="300000"
-export JIDO_SIMPLEMEM_POOL_TIMEOUT_MS="300000"
 ```
 
-When `JIDO_SIMPLEMEM_BASE_URL` is set, the default `ReqLLM` adapters build
-OpenAI-compatible model specs with that base URL and pass
-`JIDO_SIMPLEMEM_API_KEY` as the explicit request `api_key`. The optional
-transport timeouts are applied only for that custom endpoint path.
+## Development And Testing
 
-## Documentation
-
-- [Buffered SimpleMem Lifecycle](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/explanations/default-memory-policy.md)
-- [Lance Worker Architecture](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/architecture/lance-worker.md)
-- [ADR-0001: Single-Tier SimpleMem](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/decisions/ADR-0001-single-tier-simplemem.md)
-- [ADR-0002: SimpleMem Parity Refactor](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/decisions/ADR-0002-simplemem-parity-refactor.md)
-
-## Testing
-
-Run the full suite:
+Run the default suite:
 
 ```bash
 mix test
 ```
 
-The suite includes:
+`mix test` excludes `:integration` by default.
 
-- Lance store contract tests
-- buffered lifecycle tests
-- reopen/persistence tests against store-backed buffers
-- reflection and explainability tests
-- confusable-person parity tests
-- optional live LLM + embedding + LanceDB integration tests gated by env vars
-
-Run the live integration test explicitly:
+Run live integration tests explicitly:
 
 ```bash
 JIDO_SIMPLEMEM_ENABLE_LIVE_LANCE_TESTS=1 mix test --include integration
 ```
+
+Useful checks:
+
+```bash
+mix format
+mix test
+mix xref callers Jido.SimpleMem.Runtime
+```
+
+## Additional Docs
+
+- [Buffered SimpleMem Lifecycle](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/explanations/default-memory-policy.md)
+- [Lance Worker Architecture](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/architecture/lance-worker.md)
+- [ADR-0001: Single-Tier SimpleMem](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/decisions/ADR-0001-single-tier-simplemem.md)
+- [ADR-0002: SimpleMem Parity Refactor](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/decisions/ADR-0002-simplemem-parity-refactor.md)
