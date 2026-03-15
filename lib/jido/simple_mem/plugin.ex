@@ -38,6 +38,7 @@ defmodule Jido.SimpleMem.Plugin do
                   enable_planning: Zoi.boolean() |> Zoi.default(true),
                   retrieval_limit: Zoi.integer() |> Zoi.default(10),
                   context_token_budget: Zoi.integer() |> Zoi.default(1200),
+                  tokens_before_finalize: Zoi.integer() |> Zoi.default(60),
                   reflection_enabled: Zoi.boolean() |> Zoi.default(true),
                   max_reflection_rounds: Zoi.integer() |> Zoi.default(2)
                 })
@@ -67,6 +68,7 @@ defmodule Jido.SimpleMem.Plugin do
                    enable_planning: Zoi.boolean() |> Zoi.default(true),
                    retrieval_limit: Zoi.integer() |> Zoi.default(10),
                    context_token_budget: Zoi.integer() |> Zoi.default(1200),
+                   tokens_before_finalize: Zoi.integer() |> Zoi.default(60),
                    reflection_enabled: Zoi.boolean() |> Zoi.default(true),
                    max_reflection_rounds: Zoi.integer() |> Zoi.default(2)
                  })
@@ -118,6 +120,8 @@ defmodule Jido.SimpleMem.Plugin do
        enable_planning: Map.get(config, :enable_planning, defaults.enable_planning),
        retrieval_limit: config[:retrieval_limit] || defaults.retrieval_limit,
        context_token_budget: config[:context_token_budget] || defaults.context_token_budget,
+       tokens_before_finalize:
+         Map.get(config, :tokens_before_finalize, defaults.tokens_before_finalize),
        reflection_enabled: Map.get(config, :reflection_enabled, defaults.reflection_enabled),
        max_reflection_rounds: config[:max_reflection_rounds] || defaults.max_reflection_rounds
      }}

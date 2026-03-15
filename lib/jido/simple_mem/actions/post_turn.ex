@@ -25,7 +25,8 @@ defmodule Jido.SimpleMem.Actions.PostTurn do
       |> maybe_add_dialogue("user", params[:user_input], params)
       |> maybe_add_dialogue("assistant", params[:assistant_response] || params[:text], params)
 
-    with {:ok, job} <- Jido.SimpleMem.enqueue_add_dialogues(target, dialogues, session_opts(params)) do
+    with {:ok, job} <-
+           Jido.SimpleMem.enqueue_add_dialogues(target, dialogues, session_opts(params)) do
       if params[:await] do
         await_result(job.id, params[:timeout_ms])
       else
@@ -71,7 +72,9 @@ defmodule Jido.SimpleMem.Actions.PostTurn do
            last_memory_id: result[:last_memory_id],
            memory_ids: result[:memory_ids],
            memory_count: result[:memory_count],
-           buffer_remaining: result[:buffer_remaining]
+           buffer_remaining: result[:buffer_remaining],
+           finalized?: result[:finalized?],
+           auto_finalized?: result[:auto_finalized?]
          }}
 
       {:ok, result} when is_map(result) ->
@@ -82,8 +85,10 @@ defmodule Jido.SimpleMem.Actions.PostTurn do
            last_memory_id: result[:last_memory_id],
            memory_ids: result[:memory_ids],
            memory_count: result[:memory_count],
-            buffer_remaining: result[:buffer_remaining]
-          }}
+           buffer_remaining: result[:buffer_remaining],
+           finalized?: result[:finalized?],
+           auto_finalized?: result[:auto_finalized?]
+         }}
 
       {:ok, {:error, reason}} ->
         {:error, reason}

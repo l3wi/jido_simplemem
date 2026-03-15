@@ -100,19 +100,34 @@ def ensure_buffer_table(db, table_name):
 def maybe_create_memory_table(db, table_name, options, seed_row=None):
     if table_name in db.table_names():
         table = db.open_table(table_name)
+        ensure_vector_dimensions(table, options.get("vector_dimensions"))
         ensure_fts_index(table)
         return table
 
     vector_dimensions = options.get("vector_dimensions")
+    if seed_row is not None and not vector_dimensions:
+        vector_dimensions = len(seed_row.get("vector") or [])
+
     if seed_row is None and not vector_dimensions:
         return None
 
+    schema = memory_schema(vector_dimensions)
+    table = db.create_table(table_name, schema=schema)
     if seed_row is not None:
-        table = db.create_table(table_name, data=[normalize_memory_row(seed_row)])
-        ensure_fts_index(table)
-        return table
+        add_rows(table, [project_to_schema(table, normalize_memory_row(seed_row))])
+    ensure_fts_index(table)
+    return table
 
-    schema = pa.schema(
+
+def ensure_fts_index(table):
+    try:
+        table.create_fts_index("search_text", use_tantivy=True, tokenizer_name="en_stem", replace=True)
+    except Exception:
+        pass
+
+
+def memory_schema(vector_dimensions):
+    return pa.schema(
         [
             pa.field("entry_id", pa.string()),
             pa.field("namespace", pa.string()),
@@ -138,16 +153,22 @@ def maybe_create_memory_table(db, table_name, options, seed_row=None):
             pa.field("vector", pa.list_(pa.float32(), int(vector_dimensions))),
         ]
     )
-    table = db.create_table(table_name, schema=schema)
-    ensure_fts_index(table)
-    return table
 
 
-def ensure_fts_index(table):
+def ensure_vector_dimensions(table, expected_dimensions):
+    if not expected_dimensions:
+        return
+
     try:
-        table.create_fts_index("search_text", use_tantivy=True, tokenizer_name="en_stem", replace=True)
+        field = table.schema.field("vector")
+        actual_dimensions = field.type.list_size
     except Exception:
-        pass
+        return
+
+    if actual_dimensions != int(expected_dimensions):
+        raise ValueError(
+            f"vector dimension mismatch: expected {int(expected_dimensions)} but Lance table uses {actual_dimensions}"
+        )
 
 
 def memory_rows(db, table_name):
@@ -170,7 +191,7 @@ def put_memory(db, table_name, unit, options):
             pass
 
     if not created:
-        table.add([project_to_schema(table, row)])
+        add_rows(table, [project_to_schema(table, row)])
 
     ensure_fts_index(table)
     return denormalize_memory_row(row)
@@ -349,7 +370,8 @@ def replace_buffer(db, table_name, namespace, session_id, state):
     table.delete(
         f"namespace = '{escape_string(namespace)}' and session_id = '{escape_string(session_id)}'"
     )
-    table.add(
+    add_rows(
+        table,
         [
             project_to_schema(table, {
                 "namespace": namespace,
@@ -359,7 +381,7 @@ def replace_buffer(db, table_name, namespace, session_id, state):
                 "processed_cursor": int(state.get("processed_cursor") or 0),
                 "updated_at": int(datetime.utcnow().timestamp() * 1000),
             })
-        ]
+        ],
     )
 
 
@@ -467,6 +489,13 @@ def rank_score(rank):
 def project_to_schema(table, row):
     field_names = set(table.schema.names)
     return {key: value for key, value in row.items() if key in field_names}
+
+
+def add_rows(table, rows):
+    if not rows:
+        return
+    payload = pa.Table.from_pylist(rows, schema=table.schema)
+    table.add(payload)
 
 
 def build_filter(namespace, plan):

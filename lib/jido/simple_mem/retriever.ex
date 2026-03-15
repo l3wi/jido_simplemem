@@ -1,7 +1,7 @@
 defmodule Jido.SimpleMem.Retriever do
   @moduledoc false
 
-  alias Jido.SimpleMem.Mapper
+  alias Jido.SimpleMem.{EmbeddingVector, Mapper}
 
   @spec retrieve(map(), map()) :: {:ok, map()} | {:error, term()}
   def retrieve(plan, runtime) do
@@ -97,41 +97,20 @@ defmodule Jido.SimpleMem.Retriever do
           additional_queries =
             reflection[:additional_queries] || reflection["additional_queries"] || []
 
-          normalized_queries =
-            Enum.map(additional_queries, fn query ->
-              query_map = if is_map(query), do: query, else: %{"query" => to_string(query)}
+          with {:ok, normalized_queries} <-
+                 normalize_additional_queries(additional_queries, runtime) do
+            more_traces = run_queries(normalized_queries, plan, runtime)
+            merged = merge_candidates(candidates ++ Enum.flat_map(more_traces, & &1.candidates))
 
-              %{
-                query: query_map[:query] || query_map["query"] || "",
-                keywords: normalize_list(query_map[:keywords] || query_map["keywords"] || []),
-                persons: normalize_list(query_map[:persons] || query_map["persons"] || []),
-                entities: normalize_list(query_map[:entities] || query_map["entities"] || []),
-                location: query_map[:location] || query_map["location"],
-                time_expression:
-                  query_map[:time_expression] || query_map["time_expression"] ||
-                    query_map[:timestamp_hint] || query_map["timestamp_hint"],
-                query_embedding:
-                  case runtime.embedding_client.embed(
-                         query_map[:query] || query_map["query"] || "",
-                         runtime.embedding_opts
-                       ) do
-                    {:ok, vector} -> vector
-                    _ -> []
-                  end
-              }
-            end)
-
-          more_traces = run_queries(normalized_queries, plan, runtime)
-          merged = merge_candidates(candidates ++ Enum.flat_map(more_traces, & &1.candidates))
-
-          do_reflect(
-            plan,
-            merged,
-            traces ++ more_traces,
-            runtime,
-            round + 1,
-            [%{status: status, queries: normalized_queries} | reflections]
-          )
+            do_reflect(
+              plan,
+              merged,
+              traces ++ more_traces,
+              runtime,
+              round + 1,
+              [%{status: status, queries: normalized_queries} | reflections]
+            )
+          end
 
         _ ->
           {:ok,
@@ -176,6 +155,53 @@ defmodule Jido.SimpleMem.Retriever do
     end)
     |> Enum.take(plan.fetch_limit || plan.limit || 10)
     |> Enum.map(&Mapper.to_record(&1.unit))
+  end
+
+  defp normalize_additional_queries(queries, runtime) when is_list(queries) do
+    Enum.reduce_while(queries, {:ok, []}, fn query, {:ok, acc} ->
+      case normalize_additional_query(query, runtime) do
+        {:ok, normalized} -> {:cont, {:ok, acc ++ [normalized]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp normalize_additional_query(query, runtime) do
+    query_map = if is_map(query), do: query, else: %{"query" => to_string(query)}
+    query_text = query_map[:query] || query_map["query"] || ""
+
+    with {:ok, query_embedding} <- embed_query(query_text, runtime) do
+      {:ok,
+       %{
+         query: query_text,
+         keywords: normalize_list(query_map[:keywords] || query_map["keywords"] || []),
+         persons: normalize_list(query_map[:persons] || query_map["persons"] || []),
+         entities: normalize_list(query_map[:entities] || query_map["entities"] || []),
+         location: query_map[:location] || query_map["location"],
+         time_expression:
+           query_map[:time_expression] || query_map["time_expression"] ||
+             query_map[:timestamp_hint] || query_map["timestamp_hint"],
+         query_embedding: query_embedding
+       }}
+    end
+  end
+
+  defp embed_query("", _runtime), do: {:ok, []}
+
+  defp embed_query(query_text, runtime) do
+    case runtime.embedding_client.embed(query_text, runtime.embedding_opts) do
+      {:ok, vector} ->
+        case EmbeddingVector.validate(vector, runtime, :query_embedding) do
+          :ok -> {:ok, vector}
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, other}
+    end
   end
 
   defp normalize_list(list) when is_list(list), do: Enum.map(list, &to_string/1)

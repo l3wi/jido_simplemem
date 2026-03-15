@@ -87,6 +87,24 @@ Recommended hook pattern:
 `post_turn` appends dialogue to the active session buffer. Memory admission is
 decided by the LLM-backed builder, not by regex heuristics.
 
+`finalize` remains caller-controlled. `Jido.SimpleMem.Plugin` does not hook
+into Jido server shutdown directly because that would cross the plugin boundary
+into runtime lifecycle management. In practice, call `finalize`:
+
+- at chat or session end
+- before shutdown or checkpoint
+- before switching `session_id` or namespace
+- on idle-time flush boundaries
+
+The plugin can reduce the need for explicit flushes with
+`tokens_before_finalize`, which auto-finalizes when the buffered tail crosses a
+percentage of `context_token_budget`, but explicit session-end `finalize`
+should still be part of the application flow.
+
+This matches upstream SimpleMem core more closely: core usage expects the
+caller to invoke `finalize()` explicitly after dialogue ingestion, while the
+cross-session layer handles finalization during session-stop orchestration.
+
 ## Storage
 
 LanceDB is the only backend.
@@ -104,6 +122,11 @@ for:
 By default the local LanceDB directory is `.jido/simplemem.lance`. Override it
 with `JIDO_SIMPLEMEM_LANCE_PATH`.
 
+The store uses one pinned embedding dimension for the entire index. Set
+`JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS` and keep it stable for both writes and
+queries. If you change embedding dimensions later, use a fresh Lance path or
+re-embed the existing store.
+
 ## Configuration
 
 Important runtime settings:
@@ -119,6 +142,7 @@ Important runtime settings:
 - `max_reflection_rounds`
 - `retrieval_limit`
 - `context_token_budget`
+- `tokens_before_finalize`
 - `session_id`
 - `namespace`
 - `store` and `store_opts`
@@ -134,19 +158,22 @@ Required:
 
 - `JIDO_SIMPLEMEM_LLM_MODEL`
 - `JIDO_SIMPLEMEM_EMBEDDING_MODEL`
-- either provider API key env vars for those models, for example:
+- `JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS`
+- provider API key env vars for those models, for example:
   - `OPENAI_API_KEY`
   - `ANTHROPIC_API_KEY`
   - `GOOGLE_API_KEY`
-- or an explicit gateway/API key passed through client opts, such as `AI_GATEWAY_API_KEY`
 
 Optional:
 
-- `JIDO_SIMPLEMEM_GATEWAY_BASE_URL`
 - `JIDO_SIMPLEMEM_EXTRACTION_MODEL`
 - `JIDO_SIMPLEMEM_PLANNING_MODEL`
 - `JIDO_SIMPLEMEM_SYNTHESIS_MODEL`
 - `JIDO_SIMPLEMEM_ANSWER_MODEL`
+- `JIDO_SIMPLEMEM_BASE_URL`
+- `JIDO_SIMPLEMEM_API_KEY`
+- `JIDO_SIMPLEMEM_RECEIVE_TIMEOUT_MS`
+- `JIDO_SIMPLEMEM_POOL_TIMEOUT_MS`
 - `JIDO_SIMPLEMEM_LANCE_PATH`
 - `JIDO_SIMPLEMEM_PYTHON_EXECUTABLE`
 - `JIDO_SIMPLEMEM_UV_EXECUTABLE`
@@ -156,24 +183,33 @@ Optional:
 If the extraction, planning, synthesis, or answer models are omitted, the
 package falls back to `JIDO_SIMPLEMEM_LLM_MODEL`.
 
-### Vercel AI Gateway Example
-
-If you want to route models through Vercel AI Gateway, set:
+### Direct OpenAI Example
 
 ```bash
-export JIDO_SIMPLEMEM_GATEWAY_BASE_URL="https://ai-gateway.vercel.sh/v1"
-export JIDO_SIMPLEMEM_LLM_MODEL="alibaba/qwen3.5-plus"
-export JIDO_SIMPLEMEM_EMBEDDING_MODEL="alibaba/qwen3-embedding-4b"
-export AI_GATEWAY_API_KEY="..."
-export JIDO_SIMPLEMEM_GATEWAY_RECEIVE_TIMEOUT_MS="300000"
-export JIDO_SIMPLEMEM_GATEWAY_POOL_TIMEOUT_MS="300000"
-export JIDO_SIMPLEMEM_GATEWAY_CONNECT_TIMEOUT_MS="60000"
+export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-5-mini"
+export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
+export JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS="1536"
+export OPENAI_API_KEY="..."
 ```
 
-When `JIDO_SIMPLEMEM_GATEWAY_BASE_URL` is set, the default `ReqLLM` adapters
-build OpenAI-compatible model specs with that base URL and pass `AI_GATEWAY_API_KEY`
-as the explicit request `api_key`. The gateway defaults also raise request,
-pool, and connect timeouts for slower LLM/embedding calls.
+### OpenAI-Compatible Endpoint Example
+
+If you want to route requests through a custom OpenAI-compatible endpoint, set:
+
+```bash
+export JIDO_SIMPLEMEM_BASE_URL="https://your-endpoint.example.com/v1"
+export JIDO_SIMPLEMEM_API_KEY="..."
+export JIDO_SIMPLEMEM_LLM_MODEL="openai/gpt-5-mini"
+export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai/text-embedding-3-small"
+export JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS="1536"
+export JIDO_SIMPLEMEM_RECEIVE_TIMEOUT_MS="300000"
+export JIDO_SIMPLEMEM_POOL_TIMEOUT_MS="300000"
+```
+
+When `JIDO_SIMPLEMEM_BASE_URL` is set, the default `ReqLLM` adapters build
+OpenAI-compatible model specs with that base URL and pass
+`JIDO_SIMPLEMEM_API_KEY` as the explicit request `api_key`. The optional
+transport timeouts are applied only for that custom endpoint path.
 
 ## Documentation
 

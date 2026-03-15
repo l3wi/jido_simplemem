@@ -5,7 +5,7 @@ defmodule Jido.SimpleMem.TestSupport.FakeEmbeddingClient do
 
   @impl true
   def embed(text, opts \\ []) when is_binary(text) do
-    size = Keyword.get(opts, :size, 32)
+    size = Keyword.get(opts, :dimensions) || Keyword.get(opts, :size, 32)
 
     vector =
       Enum.reduce(Tokenizer.tokens(text), List.duplicate(0.0, size), fn token, acc ->

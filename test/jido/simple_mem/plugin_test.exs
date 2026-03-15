@@ -21,19 +21,19 @@ defmodule Jido.SimpleMem.PluginTest do
     def plan(%{question: question}, _opts) do
       {:ok,
        %{
-        "required_info" => [question],
-        "search_queries" => [
-          %{
-            "query" => "Jamie Lee",
-            "keywords" => ["jamie", "lee", "jasmine", "tea", "prefer"],
-            "persons" => ["Jamie Lee"],
-            "entities" => []
-          }
-        ],
-        "keywords" => ["jamie", "lee", "jasmine", "tea", "prefer"],
-        "persons" => ["Jamie Lee"],
-        "entities" => [],
-        "question_type" => "entity"
+         "required_info" => [question],
+         "search_queries" => [
+           %{
+             "query" => "Jamie Lee",
+             "keywords" => ["jamie", "lee", "jasmine", "tea", "prefer"],
+             "persons" => ["Jamie Lee"],
+             "entities" => []
+           }
+         ],
+         "keywords" => ["jamie", "lee", "jasmine", "tea", "prefer"],
+         "persons" => ["Jamie Lee"],
+         "entities" => [],
+         "question_type" => "entity"
        }}
     end
 
@@ -44,11 +44,18 @@ defmodule Jido.SimpleMem.PluginTest do
 
     @impl true
     def answer(_question, [%Record{text: text} | _], _opts) do
-      {:ok, %{answer: text, reasoning: "Selected matching record.", confidence: 0.9, context: text}}
+      {:ok,
+       %{answer: text, reasoning: "Selected matching record.", confidence: 0.9, context: text}}
     end
 
     def answer(_question, [], _opts) do
-      {:ok, %{answer: "No relevant information found", reasoning: "No records matched.", confidence: 0.0, context: ""}}
+      {:ok,
+       %{
+         answer: "No relevant information found",
+         reasoning: "No records matched.",
+         confidence: 0.0,
+         context: ""
+       }}
     end
   end
 
@@ -85,10 +92,10 @@ defmodule Jido.SimpleMem.PluginTest do
     context = %{agent: target}
 
     assert {:ok, %{queued?: true, job_id: post_turn_job_id}} =
-              Jido.SimpleMem.Actions.PostTurn.run(
-                %{user_input: "Jamie Lee prefers jasmine tea", assistant_response: "Noted."},
-                context
-              )
+             Jido.SimpleMem.Actions.PostTurn.run(
+               %{user_input: "Jamie Lee prefers jasmine tea", assistant_response: "Noted."},
+               context
+             )
 
     assert {:ok, %{status: status}} = Jido.SimpleMem.job_status(post_turn_job_id)
     assert status in [:running, :completed]
@@ -99,16 +106,20 @@ defmodule Jido.SimpleMem.PluginTest do
     assert {:ok, %{queued?: true, job_id: finalize_job_id}} =
              Jido.SimpleMem.Actions.Finalize.run(%{}, context)
 
-    assert {:ok, {:ok, %{memory_count: 0, buffer_remaining: 0, last_memory_id: nil, memory_ids: []}}} =
+    assert {:ok,
+            {:ok, %{memory_count: 0, buffer_remaining: 0, last_memory_id: nil, memory_ids: []}}} =
              Jido.SimpleMem.await_job(finalize_job_id)
 
     assert {:ok, %{status: :completed}} = Jido.SimpleMem.job_status(finalize_job_id)
 
     assert {:ok, memories} = Jido.SimpleMem.get_all_memories(target)
-    assert Enum.any?(memories, &String.contains?((&1.text || ""), "Jamie Lee prefers jasmine tea"))
+    assert Enum.any?(memories, &String.contains?(&1.text || "", "Jamie Lee prefers jasmine tea"))
 
     assert {:ok, %{simplemem_context: _context, memory_results: _results, memory_answer: _answer}} =
-             Jido.SimpleMem.Actions.PreTurn.run(%{user_input: "What does Jamie Lee prefer?"}, context)
+             Jido.SimpleMem.Actions.PreTurn.run(
+               %{user_input: "What does Jamie Lee prefer?"},
+               context
+             )
 
     signal =
       %Signal{
@@ -120,6 +131,33 @@ defmodule Jido.SimpleMem.PluginTest do
 
     assert {:ok, :continue} = Plugin.handle_signal(signal, context)
     assert {:ok, %{memory_count: 1}} = eventually_finalize(context)
+  end
+
+  test "post_turn auto-finalizes when buffered token usage crosses the threshold" do
+    target =
+      Factory.target("plugin-threshold",
+        llm_client: PluginFlowLLMClient,
+        embedding_client: FakeEmbeddingClient,
+        window_size: 6,
+        overlap_size: 2,
+        context_token_budget: 20,
+        tokens_before_finalize: 60
+      )
+
+    context = %{agent: target}
+
+    assert {:ok, %{job_id: job_id, queued?: true}} =
+             Jido.SimpleMem.Actions.PostTurn.run(
+               %{
+                 user_input: "Remember that Jamie Lee prefers jasmine tea and lives in Berlin.",
+                 assistant_response: "Noted.",
+                 await: false
+               },
+               context
+             )
+
+    assert {:ok, {:ok, %{buffer_remaining: 0, finalized?: true, auto_finalized?: true}}} =
+             Jido.SimpleMem.await_job(job_id)
   end
 
   defp eventually_finalize(context, attempts \\ 10)

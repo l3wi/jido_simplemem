@@ -18,8 +18,9 @@ defmodule Jido.SimpleMem.JobRunner do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec enqueue(atom(), (() -> term()), map()) :: {:ok, job_info()}
-  def enqueue(kind, fun, meta \\ %{}) when is_atom(kind) and is_function(fun, 0) and is_map(meta) do
+  @spec enqueue(atom(), (-> term()), map()) :: {:ok, job_info()}
+  def enqueue(kind, fun, meta \\ %{})
+      when is_atom(kind) and is_function(fun, 0) and is_map(meta) do
     GenServer.call(__MODULE__, {:enqueue, kind, fun, meta})
   end
 
@@ -58,7 +59,8 @@ defmodule Jido.SimpleMem.JobRunner do
     {:reply, {:ok, public_job(job)},
      %{
        state
-       | jobs: Map.put(state.jobs, job_id, Map.merge(job, %{task_ref: task.ref, task_pid: task.pid})),
+       | jobs:
+           Map.put(state.jobs, job_id, Map.merge(job, %{task_ref: task.ref, task_pid: task.pid})),
          refs: Map.put(state.refs, task.ref, job_id)
      }}
   end
@@ -126,6 +128,7 @@ defmodule Jido.SimpleMem.JobRunner do
 
       job ->
         now = System.system_time(:millisecond)
+
         completed =
           job
           |> Map.put(:status, status_from_result(result))
@@ -146,6 +149,7 @@ defmodule Jido.SimpleMem.JobRunner do
   defp status_from_result({:error, _}), do: :failed
 
   defp unique_job_id(kind) do
-    "smem_job_" <> Atom.to_string(kind) <> "_" <> Integer.to_string(System.unique_integer([:positive]))
+    "smem_job_" <>
+      Atom.to_string(kind) <> "_" <> Integer.to_string(System.unique_integer([:positive]))
   end
 end

@@ -30,6 +30,30 @@ The write path is session-oriented:
 If a session ends before the buffer fills, `finalize/2` flushes the remaining
 dialogue through the same path.
 
+## Session Boundaries
+
+`finalize/2` is intentionally caller-controlled. The plugin does not hook into
+Jido server shutdown directly because that would couple memory behavior to
+runtime lifecycle management beyond the plugin boundary.
+
+Recommended ownership:
+
+1. the plugin owns `pre_turn` and `post_turn`
+2. the application or session manager owns `finalize`
+
+In practice, call `finalize/2`:
+
+- at chat or session end
+- before shutdown or checkpoint
+- before switching `session_id` or namespace
+- on idle timeout if your app treats idle as a session boundary
+
+`tokens_before_finalize` is a helper for earlier flushing. When the buffered
+tail crosses the configured percentage of `context_token_budget`, the write
+path auto-finalizes that trailing buffer. It reduces the chance of carrying a
+large incomplete window indefinitely, but it does not replace an explicit
+session-end flush.
+
 ## Why Buffering Matters
 
 Immediate per-message writes lose context and create low-value memories. The

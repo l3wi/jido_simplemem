@@ -21,14 +21,14 @@ defmodule Jido.SimpleMem.ConfigTest do
     assert {Lance, opts} = defaults.store
     assert is_binary(opts[:path])
     assert String.ends_with?(opts[:path], ".jido/simplemem.lance")
+    assert defaults.tokens_before_finalize == 60
   end
 
   test "llm client opts reuse the shared model and include synthesis model" do
     System.put_env("JIDO_SIMPLEMEM_LLM_MODEL", "openai:gpt-4.1-mini")
     System.delete_env("JIDO_SIMPLEMEM_SYNTHESIS_MODEL")
-    System.delete_env("JIDO_SIMPLEMEM_GATEWAY_BASE_URL")
-    System.delete_env("AI_GATEWAY_API_KEY")
-    System.delete_env("VERCEL_API_KEY")
+    System.delete_env("JIDO_SIMPLEMEM_BASE_URL")
+    System.put_env("JIDO_SIMPLEMEM_API_KEY", "endpoint-key-should-not-be-used")
 
     opts = Config.default_llm_client_opts()
 
@@ -37,27 +37,38 @@ defmodule Jido.SimpleMem.ConfigTest do
     assert opts[:synthesis_model] == "openai:gpt-4.1-mini"
     assert opts[:planning_model] == "openai:gpt-4.1-mini"
     assert opts[:answer_model] == "openai:gpt-4.1-mini"
+    refute Keyword.has_key?(opts, :api_key)
   end
 
-  test "gateway env builds openai-compatible model specs and passes vercel api key" do
-    System.put_env("JIDO_SIMPLEMEM_GATEWAY_BASE_URL", "https://gateway.ai.vercel.com/v1")
-    System.put_env("JIDO_SIMPLEMEM_LLM_MODEL", "alibaba/qwen3.5-plus")
-    System.put_env("JIDO_SIMPLEMEM_EMBEDDING_MODEL", "alibaba/qwen3-embedding-4b")
-    System.put_env("AI_GATEWAY_API_KEY", "test-gateway-key")
-    System.put_env("JIDO_SIMPLEMEM_GATEWAY_RECEIVE_TIMEOUT_MS", "300000")
-    System.put_env("JIDO_SIMPLEMEM_GATEWAY_POOL_TIMEOUT_MS", "300000")
-    System.put_env("JIDO_SIMPLEMEM_GATEWAY_CONNECT_TIMEOUT_MS", "60000")
+  test "custom base url env builds openai-compatible model specs and passes explicit api key" do
+    System.put_env("JIDO_SIMPLEMEM_BASE_URL", "https://custom.example.com/v1")
+    System.put_env("JIDO_SIMPLEMEM_LLM_MODEL", "openai/gpt-5-mini")
+    System.put_env("JIDO_SIMPLEMEM_EMBEDDING_MODEL", "openai/text-embedding-3-small")
+    System.put_env("JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS", "1024")
+    System.put_env("JIDO_SIMPLEMEM_API_KEY", "test-endpoint-key")
+    System.put_env("JIDO_SIMPLEMEM_RECEIVE_TIMEOUT_MS", "300000")
+    System.put_env("JIDO_SIMPLEMEM_POOL_TIMEOUT_MS", "300000")
 
     llm_opts = Config.default_llm_client_opts()
     embedding_opts = Config.default_embedding_client_opts()
 
-    assert llm_opts[:api_key] == "test-gateway-key"
-    assert embedding_opts[:api_key] == "test-gateway-key"
+    assert llm_opts[:api_key] == "test-endpoint-key"
+    assert embedding_opts[:api_key] == "test-endpoint-key"
+    assert embedding_opts[:dimensions] == 1024
     assert llm_opts[:receive_timeout] == 300_000
     assert llm_opts[:req_http_options][:pool_timeout] == 300_000
-    assert llm_opts[:req_http_options][:connect_options][:timeout] == 60_000
-    assert llm_opts[:model] == %{provider: :openai, id: "alibaba/qwen3.5-plus", base_url: "https://gateway.ai.vercel.com/v1"}
-    assert embedding_opts[:model] == %{provider: :openai, id: "alibaba/qwen3-embedding-4b", base_url: "https://gateway.ai.vercel.com/v1"}
+
+    assert llm_opts[:model] == %{
+             provider: :openai,
+             id: "openai/gpt-5-mini",
+             base_url: "https://custom.example.com/v1"
+           }
+
+    assert embedding_opts[:model] == %{
+             provider: :openai,
+             id: "openai/text-embedding-3-small",
+             base_url: "https://custom.example.com/v1"
+           }
   end
 
   test "default store includes worker opts from env" do
@@ -65,6 +76,7 @@ defmodule Jido.SimpleMem.ConfigTest do
     System.put_env("JIDO_SIMPLEMEM_UV_EXECUTABLE", "/opt/homebrew/bin/uv")
     System.put_env("JIDO_SIMPLEMEM_PYTHON_EXECUTABLE", "/usr/bin/python3")
     System.put_env("JIDO_SIMPLEMEM_WORKER_START_TIMEOUT_MS", "90000")
+    System.put_env("JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS", "1536")
 
     {Lance, opts} = Config.default_store()
 
@@ -72,5 +84,6 @@ defmodule Jido.SimpleMem.ConfigTest do
     assert opts[:uv_executable] == "/opt/homebrew/bin/uv"
     assert opts[:python_executable] == "/usr/bin/python3"
     assert opts[:worker_start_timeout_ms] == 90_000
+    assert opts[:vector_dimensions] == 1536
   end
 end

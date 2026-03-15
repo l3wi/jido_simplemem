@@ -8,8 +8,20 @@ defmodule Jido.SimpleMem.EmbeddingClient.ReqLLM do
     with {:ok, model_spec} <- fetch_model(opts),
          {:ok, model} <- ReqLLM.Embedding.validate_model(model_spec),
          :ok <- ensure_provider_auth(model.provider, opts),
-         {:ok, embedding} <- ReqLLM.Embedding.embed(model_spec, text, request_opts(opts)) do
-      {:ok, normalize_embedding(embedding)}
+         {:ok, embedding_result} <-
+           ReqLLM.Embedding.embed(
+             model_spec,
+             text,
+             Keyword.put(request_opts(opts), :return_usage, true)
+           ) do
+      case embedding_result do
+        %{embedding: embedding, usage: usage} ->
+          maybe_record_usage(model_spec, usage, opts)
+          {:ok, normalize_embedding(embedding)}
+
+        embedding ->
+          {:ok, normalize_embedding(embedding)}
+      end
     end
   rescue
     error in [ReqLLM.Error.Invalid.Parameter] ->
@@ -45,7 +57,8 @@ defmodule Jido.SimpleMem.EmbeddingClient.ReqLLM do
           _ ->
             {:error,
              ReqLLM.Error.Invalid.Parameter.exception(
-               parameter: "provider API key required for embeddings via :api_key option or env var: #{env_var}"
+               parameter:
+                 "provider API key required for embeddings via :api_key option or env var: #{env_var}"
              )}
         end
     end
@@ -59,10 +72,50 @@ defmodule Jido.SimpleMem.EmbeddingClient.ReqLLM do
       :user,
       :provider_options,
       :req_http_options,
-      :receive_timeout,
       :api_key
     ])
+    |> maybe_put_base_url(Keyword.get(opts, :model))
   end
+
+  # ReqLLM currently ignores inline model base_url for :embedding operations,
+  # so forward it explicitly to keep custom endpoint embeddings on the right host.
+  defp maybe_put_base_url(request_opts, %{base_url: base_url})
+       when is_binary(base_url) and base_url != "" do
+    Keyword.put_new(request_opts, :base_url, base_url)
+  end
+
+  defp maybe_put_base_url(request_opts, _model), do: request_opts
+
+  defp maybe_record_usage(model_spec, usage, opts) do
+    event = %{
+      stage: :embedding,
+      model: model_label(model_spec),
+      usage: usage
+    }
+
+    case Keyword.get(opts, :usage_recorder) do
+      pid when is_pid(pid) ->
+        send(pid, {:simplemem_usage, event})
+        :ok
+
+      fun when is_function(fun, 1) ->
+        fun.(event)
+        :ok
+
+      {module, function} when is_atom(module) and is_atom(function) ->
+        apply(module, function, [event])
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp model_label(%{provider: provider, id: id}) when is_atom(provider) and is_binary(id),
+    do: "#{provider}:#{id}"
+
+  defp model_label(model) when is_binary(model), do: model
+  defp model_label(model), do: inspect(model)
 
   defp normalize_embedding(values) when is_list(values) do
     Enum.map(values, fn

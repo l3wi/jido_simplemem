@@ -12,7 +12,7 @@ ensure_embedding_config! = fn ->
     Missing JIDO_SIMPLEMEM_LLM_MODEL.
 
     Example:
-      export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-4.1-mini"
+      export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-5-mini"
       export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
       export OPENAI_API_KEY="..."
     """
@@ -23,7 +23,7 @@ ensure_embedding_config! = fn ->
     Missing JIDO_SIMPLEMEM_EMBEDDING_MODEL.
 
     Example:
-      export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-4.1-mini"
+      export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-5-mini"
       export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
       export OPENAI_API_KEY="..."
     """

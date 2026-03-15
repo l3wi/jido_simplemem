@@ -1,7 +1,7 @@
 defmodule Jido.SimpleMem.Extractor do
   @moduledoc false
 
-  alias Jido.SimpleMem.{MemoryUnit, Tokenizer}
+  alias Jido.SimpleMem.{EmbeddingVector, MemoryUnit, Tokenizer}
 
   @spec extract(map(), map()) :: {:ok, MemoryUnit.t()} | {:error, term()}
   def extract(attrs, runtime) do
@@ -154,9 +154,17 @@ defmodule Jido.SimpleMem.Extractor do
 
   defp embed(text, runtime) do
     case runtime.embedding_client.embed(text, runtime.embedding_opts) do
-      {:ok, vector} -> {:ok, vector}
-      {:error, _reason} = error -> error
-      other -> {:error, other}
+      {:ok, vector} ->
+        case EmbeddingVector.validate(vector, runtime, :memory_write) do
+          :ok -> {:ok, vector}
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, other}
     end
   end
 

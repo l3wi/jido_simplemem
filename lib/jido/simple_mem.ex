@@ -9,6 +9,7 @@ defmodule Jido.SimpleMem do
     Answerer,
     Config,
     Dialogue,
+    EmbeddingVector,
     Explainer,
     JobRunner,
     Mapper,
@@ -162,7 +163,8 @@ defmodule Jido.SimpleMem do
 
   @spec enqueue_add_dialogues(target(), [map() | Dialogue.t()], keyword()) ::
           {:ok, map()} | {:error, term()}
-  def enqueue_add_dialogues(target, dialogues, opts \\ []) when is_list(dialogues) and is_list(opts) do
+  def enqueue_add_dialogues(target, dialogues, opts \\ [])
+      when is_list(dialogues) and is_list(opts) do
     JobRunner.enqueue(
       :post_turn,
       fn -> add_dialogues(target, dialogues, opts) end,
@@ -216,7 +218,9 @@ defmodule Jido.SimpleMem do
          {:ok, llm_client, llm_opts} <-
            resolve_client(:llm_client, attrs, opts, plugin_state, defaults),
          {:ok, embedding_client, embedding_opts} <-
-           resolve_client(:embedding_client, attrs, opts, plugin_state, defaults) do
+           resolve_client(:embedding_client, attrs, opts, plugin_state, defaults),
+         {:ok, {store_opts, embedding_opts, embedding_dimensions}} <-
+           EmbeddingVector.align(store_opts, embedding_opts) do
       window_size =
         pick_value(opts, attrs, :window_size, plugin_state[:window_size] || defaults.window_size)
 
@@ -244,6 +248,7 @@ defmodule Jido.SimpleMem do
          llm_opts: llm_opts,
          embedding_client: embedding_client,
          embedding_opts: embedding_opts,
+         embedding_dimensions: embedding_dimensions,
          retrieval_limit:
            pick_value(
              opts,
@@ -257,6 +262,13 @@ defmodule Jido.SimpleMem do
              attrs,
              :context_token_budget,
              plugin_state[:context_token_budget] || defaults.context_token_budget
+           ),
+         tokens_before_finalize:
+           pick_value(
+             opts,
+             attrs,
+             :tokens_before_finalize,
+             plugin_state[:tokens_before_finalize] || defaults.tokens_before_finalize
            ),
          window_size: window_size,
          overlap_size: overlap_size,

@@ -14,7 +14,14 @@ defmodule Jido.SimpleMem.TestSupport.Factory do
     llm_client_opts = Keyword.get(opts, :llm_client_opts, [])
     embedding_client = Keyword.get(opts, :embedding_client, FakeEmbeddingClient)
     embedding_client_opts = Keyword.get(opts, :embedding_client_opts, [])
-    store_opts = [path: path, client: FakeLanceClient]
+
+    store_opts =
+      Keyword.get(
+        opts,
+        :store_opts,
+        path: path,
+        client: FakeLanceClient
+      )
 
     %{
       id: agent_id,
@@ -36,7 +43,8 @@ defmodule Jido.SimpleMem.TestSupport.Factory do
           max_retrieval_workers: 2,
           enable_planning: true,
           retrieval_limit: Keyword.get(opts, :retrieval_limit, 5),
-          context_token_budget: 1200,
+          context_token_budget: Keyword.get(opts, :context_token_budget, 1200),
+          tokens_before_finalize: Keyword.get(opts, :tokens_before_finalize, 60),
           reflection_enabled: Keyword.get(opts, :reflection_enabled, true),
           max_reflection_rounds: Keyword.get(opts, :max_reflection_rounds, 2)
         }

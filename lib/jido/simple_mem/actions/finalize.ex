@@ -58,8 +58,8 @@ defmodule Jido.SimpleMem.Actions.Finalize do
            last_memory_id: result[:last_memory_id],
            memory_ids: result[:memory_ids],
            memory_count: result[:memory_count],
-            buffer_remaining: result[:buffer_remaining]
-          }}
+           buffer_remaining: result[:buffer_remaining]
+         }}
 
       {:ok, {:error, reason}} ->
         {:error, reason}

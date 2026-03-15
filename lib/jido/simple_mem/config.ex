@@ -18,6 +18,7 @@ defmodule Jido.SimpleMem.Config do
       embedding_client_opts: default_embedding_client_opts(),
       retrieval_limit: 10,
       context_token_budget: 1_200,
+      tokens_before_finalize: 60,
       window_size: 6,
       overlap_size: 2,
       enable_parallel_processing: true,
@@ -58,13 +59,14 @@ defmodule Jido.SimpleMem.Config do
 
   @spec default_embedding_client_opts() :: keyword()
   def default_embedding_client_opts do
-    model = gateway_model_spec(System.get_env("JIDO_SIMPLEMEM_EMBEDDING_MODEL"))
+    model = model_spec(System.get_env("JIDO_SIMPLEMEM_EMBEDDING_MODEL"))
 
     []
     |> maybe_put(:model, model)
-    |> maybe_put(:api_key, gateway_api_key())
-    |> maybe_put(:receive_timeout, gateway_receive_timeout())
-    |> maybe_put(:req_http_options, gateway_req_http_options())
+    |> maybe_put(:dimensions, embedding_dimensions())
+    |> maybe_put(:api_key, explicit_api_key())
+    |> maybe_put(:receive_timeout, request_receive_timeout())
+    |> maybe_put(:req_http_options, request_http_options())
   end
 
   @spec default_llm_client_opts() :: keyword()
@@ -76,19 +78,20 @@ defmodule Jido.SimpleMem.Config do
     answer_model = System.get_env("JIDO_SIMPLEMEM_ANSWER_MODEL") || shared_model
 
     []
-    |> maybe_put(:model, gateway_model_spec(shared_model))
-    |> maybe_put(:extraction_model, gateway_model_spec(extraction_model))
-    |> maybe_put(:synthesis_model, gateway_model_spec(synthesis_model))
-    |> maybe_put(:planning_model, gateway_model_spec(planning_model))
-    |> maybe_put(:answer_model, gateway_model_spec(answer_model))
-    |> maybe_put(:api_key, gateway_api_key())
-    |> maybe_put(:receive_timeout, gateway_receive_timeout())
-    |> maybe_put(:req_http_options, gateway_req_http_options())
+    |> maybe_put(:model, model_spec(shared_model))
+    |> maybe_put(:extraction_model, model_spec(extraction_model))
+    |> maybe_put(:synthesis_model, model_spec(synthesis_model))
+    |> maybe_put(:planning_model, model_spec(planning_model))
+    |> maybe_put(:answer_model, model_spec(answer_model))
+    |> maybe_put(:api_key, explicit_api_key())
+    |> maybe_put(:receive_timeout, request_receive_timeout())
+    |> maybe_put(:req_http_options, request_http_options())
   end
 
   @spec default_worker_opts() :: keyword()
   def default_worker_opts do
     []
+    |> maybe_put_integer(:vector_dimensions, embedding_dimensions())
     |> maybe_put(:uv_executable, System.get_env("JIDO_SIMPLEMEM_UV_EXECUTABLE"))
     |> maybe_put(:python_executable, System.get_env("JIDO_SIMPLEMEM_PYTHON_EXECUTABLE"))
     |> maybe_put_integer(
@@ -104,6 +107,9 @@ defmodule Jido.SimpleMem.Config do
   defp maybe_put_integer(opts, _key, nil), do: opts
   defp maybe_put_integer(opts, _key, ""), do: opts
 
+  defp maybe_put_integer(opts, key, value) when is_integer(value),
+    do: Keyword.put(opts, key, value)
+
   defp maybe_put_integer(opts, key, value) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, ""} -> Keyword.put(opts, key, parsed)
@@ -111,11 +117,11 @@ defmodule Jido.SimpleMem.Config do
     end
   end
 
-  defp gateway_model_spec(nil), do: nil
-  defp gateway_model_spec(""), do: nil
+  defp model_spec(nil), do: nil
+  defp model_spec(""), do: nil
 
-  defp gateway_model_spec(model_id) when is_binary(model_id) do
-    case gateway_base_url() do
+  defp model_spec(model_id) when is_binary(model_id) do
+    case custom_base_url() do
       nil ->
         model_id
 
@@ -128,37 +134,40 @@ defmodule Jido.SimpleMem.Config do
     end
   end
 
-  defp gateway_api_key do
-    case System.get_env("AI_GATEWAY_API_KEY") || System.get_env("VERCEL_API_KEY") do
+  defp explicit_api_key do
+    case custom_base_url() do
+      value when is_binary(value) and value != "" ->
+        case System.get_env("JIDO_SIMPLEMEM_API_KEY") do
+          key when is_binary(key) and key != "" -> key
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp custom_base_url do
+    case System.get_env("JIDO_SIMPLEMEM_BASE_URL") do
       value when is_binary(value) and value != "" -> value
       _ -> nil
     end
   end
 
-  defp gateway_base_url do
-    case System.get_env("JIDO_SIMPLEMEM_GATEWAY_BASE_URL") do
-      value when is_binary(value) and value != "" -> value
-      _ -> nil
-    end
-  end
-
-  defp gateway_receive_timeout do
-    case gateway_base_url() do
+  defp request_receive_timeout do
+    case custom_base_url() do
       nil -> nil
-      _ -> timeout_env("JIDO_SIMPLEMEM_GATEWAY_RECEIVE_TIMEOUT_MS", 300_000)
+      _ -> timeout_env("JIDO_SIMPLEMEM_RECEIVE_TIMEOUT_MS", 300_000)
     end
   end
 
-  defp gateway_req_http_options do
-    case gateway_base_url() do
+  defp request_http_options do
+    case custom_base_url() do
       nil ->
         nil
 
       _ ->
-        [
-          pool_timeout: timeout_env("JIDO_SIMPLEMEM_GATEWAY_POOL_TIMEOUT_MS", 300_000),
-          connect_options: [timeout: timeout_env("JIDO_SIMPLEMEM_GATEWAY_CONNECT_TIMEOUT_MS", 60_000)]
-        ]
+        [pool_timeout: timeout_env("JIDO_SIMPLEMEM_POOL_TIMEOUT_MS", 300_000)]
     end
   end
 
@@ -172,6 +181,19 @@ defmodule Jido.SimpleMem.Config do
 
       _ ->
         default
+    end
+  end
+
+  defp embedding_dimensions do
+    case System.get_env("JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS") do
+      value when is_binary(value) and value != "" ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 -> parsed
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
   end
 end

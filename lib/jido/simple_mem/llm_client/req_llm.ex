@@ -55,11 +55,11 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
 
     result =
       model
-      |> ReqLLM.generate_text!(
+      |> ReqLLM.generate_text(
         prompt <> extraction_json_contract(),
-        Keyword.merge(request_opts(opts), temperature: 1.0)
+        Keyword.merge(request_opts(opts), temperature: 0.0)
       )
-      |> decode_json_object!()
+      |> unwrap_text_response!(:extract_window, opts)
 
     {:ok, normalize_entries(result["entries"] || result[:entries] || [])}
   rescue
@@ -94,11 +94,11 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
 
     result =
       model
-      |> ReqLLM.generate_text!(
+      |> ReqLLM.generate_text(
         prompt <> extraction_json_contract(),
-        Keyword.merge(request_opts(opts), temperature: 1.0)
+        Keyword.merge(request_opts(opts), temperature: 0.0)
       )
-      |> decode_json_object!()
+      |> unwrap_text_response!(:synthesize, opts)
 
     synthesized = normalize_entries(result[:entries] || result["entries"] || [])
 
@@ -150,7 +150,14 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
 
     {:ok,
      query_plan(
-       ReqLLM.generate_object!(model, prompt, schema, Keyword.merge(request_opts(opts), temperature: 1.0))
+       ReqLLM.generate_object(
+         model,
+         prompt,
+         schema,
+         Keyword.merge(request_opts(opts), temperature: 0.0)
+       )
+       |> unwrap_object_response!(:plan, opts)
+       |> response_object()
      )}
   rescue
     error -> {:error, error}
@@ -188,7 +195,14 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
 
     {:ok,
      reflection_result(
-       ReqLLM.generate_object!(model, prompt, schema, Keyword.merge(request_opts(opts), temperature: 1.0))
+       ReqLLM.generate_object(
+         model,
+         prompt,
+         schema,
+         Keyword.merge(request_opts(opts), temperature: 0.0)
+       )
+       |> unwrap_object_response!(:reflect, opts)
+       |> response_object()
      )}
   rescue
     error -> {:error, error}
@@ -220,11 +234,11 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
 
     object =
       model
-      |> ReqLLM.generate_text!(
+      |> ReqLLM.generate_text(
         prompt <> answer_json_contract(),
-        Keyword.merge(request_opts(opts), temperature: 1.0)
+        Keyword.merge(request_opts(opts), temperature: 0.0)
       )
-      |> decode_json_object!()
+      |> unwrap_text_response!(:answer, opts)
 
     {:ok,
      %{
@@ -262,7 +276,8 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
 
           _ ->
             raise ReqLLM.Error.Invalid.Parameter.exception(
-                    parameter: "provider API key required via :api_key option or env var: #{env_var}"
+                    parameter:
+                      "provider API key required via :api_key option or env var: #{env_var}"
                   )
         end
     end
@@ -423,6 +438,52 @@ defmodule Jido.SimpleMem.LLMClient.ReqLLM do
       :max_tokens,
       :max_completion_tokens
     ])
+  end
+
+  defp unwrap_text_response!({:ok, response}, stage, opts) do
+    maybe_record_usage(stage, response, opts)
+    response |> ReqLLM.Response.text() |> decode_json_object!()
+  end
+
+  defp unwrap_text_response!({:error, reason}, _stage, _opts), do: raise(reason)
+
+  defp unwrap_object_response!({:ok, response}, stage, opts) do
+    maybe_record_usage(stage, response, opts)
+    response
+  end
+
+  defp unwrap_object_response!({:error, reason}, _stage, _opts), do: raise(reason)
+
+  defp response_object(response) do
+    ReqLLM.Response.object(response) || response.object || %{}
+  end
+
+  defp maybe_record_usage(stage, response, opts) do
+    usage = ReqLLM.Response.usage(response)
+
+    event = %{
+      stage: stage,
+      model: response.model,
+      usage: usage,
+      provider_meta: response.provider_meta
+    }
+
+    case Keyword.get(opts, :usage_recorder) do
+      pid when is_pid(pid) ->
+        send(pid, {:simplemem_usage, event})
+        :ok
+
+      fun when is_function(fun, 1) ->
+        fun.(event)
+        :ok
+
+      {module, function} when is_atom(module) and is_atom(function) ->
+        apply(module, function, [event])
+        :ok
+
+      _ ->
+        :ok
+    end
   end
 
   defp decode_json_object!(text) when is_binary(text) do

@@ -13,13 +13,20 @@ responding and `post_turn` after a turn so it can retrieve context and append
 dialogue to the current memory buffer. Use `finalize` to flush incomplete
 windows.
 
+The surrounding app or session manager should own that `finalize` call. A good
+default is to call it at session end, before shutdown, before switching
+`session_id`, or on an idle timeout. The plugin also supports
+`tokens_before_finalize` for automatic flushes when the buffered tail grows too
+large, but that is a helper, not a replacement for a real session-end flush.
+
 ## Required Env
 
 LLM and embedding models are required. Before running the demo, set:
 
 ```bash
-export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-4.1-mini"
+export JIDO_SIMPLEMEM_LLM_MODEL="openai:gpt-5-mini"
 export JIDO_SIMPLEMEM_EMBEDDING_MODEL="openai:text-embedding-3-small"
+export JIDO_SIMPLEMEM_EMBEDDING_DIMENSIONS="1536"
 export OPENAI_API_KEY="..."
 ```
 
