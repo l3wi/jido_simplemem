@@ -203,8 +203,17 @@ defmodule Jido.SimpleMem.Store.Lance do
   defp normalize_list(nil), do: []
   defp normalize_list(value), do: [to_string(value)]
 
-  defp normalize_channels(list) when is_list(list),
-    do: Enum.map(list, &String.to_atom(to_string(&1)))
+  @known_channels %{"structured" => :structured, "semantic" => :semantic, "keyword" => :keyword}
+
+  defp normalize_channels(list) when is_list(list) do
+    list
+    |> Enum.reduce([], fn channel, acc ->
+      case Map.fetch(@known_channels, to_string(channel)) do
+        {:ok, normalized} -> acc ++ [normalized]
+        :error -> acc
+      end
+    end)
+  end
 
   defp normalize_channels(_), do: []
 

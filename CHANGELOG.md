@@ -17,4 +17,13 @@
   synthesis stage.
 - Aligned retrieval around planned hybrid search, source-priority merging, and
   reflection rounds.
+- Removed dead plugin/runtime knobs and the unused `Jido.SimpleMem.Ranker`
+  module.
+- Centralized runtime resolution behind a shared internal runtime builder used
+  by both the public API and plugin mount path.
+- Hardened LLM and Lance worker boundaries by rejecting unknown external enum
+  values and dropping unknown extracted keys without atom creation.
+- Changed plugin auto-capture to surface failures through logs, telemetry, and
+  typed plugin errors instead of silently swallowing them.
+- Added bounded completed-job retention in `Jido.SimpleMem.JobRunner`.
 - Updated docs, examples, and env configuration for Lance-only operation.

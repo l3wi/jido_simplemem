@@ -87,6 +87,10 @@ Recommended hook pattern:
 `post_turn` appends dialogue to the active session buffer. Memory admission is
 decided by the LLM-backed builder, not by regex heuristics.
 
+Signal auto-capture runs through the same runtime path as direct ingestion. If
+auto-capture fails, the plugin now logs the failure, emits telemetry, and
+returns a typed plugin error instead of silently continuing.
+
 `finalize` remains caller-controlled. `Jido.SimpleMem.Plugin` does not hook
 into Jido server shutdown directly because that would cross the plugin boundary
 into runtime lifecycle management. In practice, call `finalize`:
@@ -133,11 +137,8 @@ Important runtime settings:
 
 - `window_size`
 - `overlap_size`
-- `enable_parallel_processing`
-- `max_parallel_workers`
 - `enable_parallel_retrieval`
 - `max_retrieval_workers`
-- `enable_planning`
 - `reflection_enabled`
 - `max_reflection_rounds`
 - `retrieval_limit`

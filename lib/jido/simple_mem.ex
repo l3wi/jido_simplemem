@@ -9,13 +9,13 @@ defmodule Jido.SimpleMem do
     Answerer,
     Config,
     Dialogue,
-    EmbeddingVector,
     Explainer,
     JobRunner,
     Mapper,
     MemoryBuilder,
     Planner,
-    Retriever
+    Retriever,
+    Runtime
   }
 
   @type target :: map() | struct()
@@ -210,122 +210,7 @@ defmodule Jido.SimpleMem do
 
   @spec resolve_runtime(target(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def resolve_runtime(target, attrs, opts) when is_map(attrs) and is_list(opts) do
-    plugin_state = plugin_state(target)
-    defaults = Config.defaults()
-
-    with {:ok, namespace} <- resolve_namespace(target, attrs, opts, plugin_state, defaults),
-         {:ok, {store_mod, store_opts}} <- resolve_store(attrs, opts, plugin_state, defaults),
-         {:ok, llm_client, llm_opts} <-
-           resolve_client(:llm_client, attrs, opts, plugin_state, defaults),
-         {:ok, embedding_client, embedding_opts} <-
-           resolve_client(:embedding_client, attrs, opts, plugin_state, defaults),
-         {:ok, {store_opts, embedding_opts, embedding_dimensions}} <-
-           EmbeddingVector.align(store_opts, embedding_opts) do
-      window_size =
-        pick_value(opts, attrs, :window_size, plugin_state[:window_size] || defaults.window_size)
-
-      overlap_size =
-        pick_value(
-          opts,
-          attrs,
-          :overlap_size,
-          plugin_state[:overlap_size] || defaults.overlap_size
-        )
-
-      {:ok,
-       %{
-         namespace: namespace,
-         session_id:
-           pick_value(
-             opts,
-             attrs,
-             :session_id,
-             plugin_state[:session_id] || target_id(target) || namespace
-           ),
-         store_mod: store_mod,
-         store_opts: store_opts,
-         llm_client: llm_client,
-         llm_opts: llm_opts,
-         embedding_client: embedding_client,
-         embedding_opts: embedding_opts,
-         embedding_dimensions: embedding_dimensions,
-         retrieval_limit:
-           pick_value(
-             opts,
-             attrs,
-             :retrieval_limit,
-             plugin_state[:retrieval_limit] || defaults.retrieval_limit
-           ),
-         context_token_budget:
-           pick_value(
-             opts,
-             attrs,
-             :context_token_budget,
-             plugin_state[:context_token_budget] || defaults.context_token_budget
-           ),
-         tokens_before_finalize:
-           pick_value(
-             opts,
-             attrs,
-             :tokens_before_finalize,
-             plugin_state[:tokens_before_finalize] || defaults.tokens_before_finalize
-           ),
-         window_size: window_size,
-         overlap_size: overlap_size,
-         step_size: max(1, window_size - overlap_size),
-         enable_parallel_processing:
-           pick_value(
-             opts,
-             attrs,
-             :enable_parallel_processing,
-             plugin_state[:enable_parallel_processing] || defaults.enable_parallel_processing
-           ),
-         max_parallel_workers:
-           pick_value(
-             opts,
-             attrs,
-             :max_parallel_workers,
-             plugin_state[:max_parallel_workers] || defaults.max_parallel_workers
-           ),
-         enable_parallel_retrieval:
-           pick_value(
-             opts,
-             attrs,
-             :enable_parallel_retrieval,
-             plugin_state[:enable_parallel_retrieval] || defaults.enable_parallel_retrieval
-           ),
-         max_retrieval_workers:
-           pick_value(
-             opts,
-             attrs,
-             :max_retrieval_workers,
-             plugin_state[:max_retrieval_workers] || defaults.max_retrieval_workers
-           ),
-         enable_planning:
-           pick_value(
-             opts,
-             attrs,
-             :enable_planning,
-             plugin_state[:enable_planning] || defaults.enable_planning
-           ),
-         reflection_enabled:
-           pick_value(
-             opts,
-             attrs,
-             :reflection_enabled,
-             plugin_state[:reflection_enabled] || defaults.reflection_enabled
-           ),
-         max_reflection_rounds:
-           pick_value(
-             opts,
-             attrs,
-             :max_reflection_rounds,
-             plugin_state[:max_reflection_rounds] || defaults.max_reflection_rounds
-           ),
-         now: Keyword.get(opts, :now, System.system_time(:millisecond)),
-         plugin_state: plugin_state
-       }}
-    end
+    Runtime.resolve(target, attrs, opts)
   end
 
   @spec normalize_dialogues([map() | Dialogue.t()]) :: {:ok, [Dialogue.t()]} | {:error, term()}
@@ -341,79 +226,6 @@ defmodule Jido.SimpleMem do
     case Enum.find(results, &match?({:error, _}, &1)) do
       {:error, reason} -> {:error, reason}
       nil -> {:ok, Enum.map(results, fn {:ok, dialogue} -> dialogue end)}
-    end
-  end
-
-  defp resolve_namespace(target, attrs, opts, plugin_state, defaults) do
-    explicit = pick_value(opts, attrs, :namespace, plugin_state[:namespace])
-
-    namespace =
-      cond do
-        is_binary(explicit) and String.trim(explicit) != "" ->
-          String.trim(explicit)
-
-        is_binary(target_id(target)) ->
-          "agent:" <> target_id(target)
-
-        defaults.namespace != nil ->
-          defaults.namespace
-
-        true ->
-          nil
-      end
-
-    if is_binary(namespace), do: {:ok, namespace}, else: {:error, :namespace_required}
-  end
-
-  defp resolve_store(attrs, opts, plugin_state, defaults) do
-    store_value = pick_value(opts, attrs, :store, plugin_state[:store] || defaults.store)
-    override_opts = pick_value(opts, attrs, :store_opts, plugin_state[:store_opts] || [])
-
-    with {:ok, {store_mod, base_opts}} <- Config.normalize_store(store_value),
-         true <- is_list(override_opts) do
-      {:ok, {store_mod, Keyword.merge(base_opts, override_opts)}}
-    else
-      false -> {:error, :invalid_store_opts}
-      {:error, _reason} = error -> error
-    end
-  end
-
-  defp resolve_client(key, attrs, opts, plugin_state, defaults) do
-    client = pick_value(opts, attrs, key, plugin_state[key] || Map.fetch!(defaults, key))
-    client_opts_key = String.to_atom("#{key}_opts")
-
-    client_opts =
-      pick_value(
-        opts,
-        attrs,
-        client_opts_key,
-        plugin_state[client_opts_key] || Map.get(defaults, client_opts_key, [])
-      )
-
-    cond do
-      is_atom(client) and not is_nil(client) and is_list(client_opts) ->
-        {:ok, client, client_opts}
-
-      not is_atom(client) ->
-        {:error, {:invalid_client, key, client}}
-
-      true ->
-        {:error, {:invalid_client_opts, client_opts_key}}
-    end
-  end
-
-  defp plugin_state(%{state: %{} = state}), do: Map.get(state, plugin_state_key(), %{})
-  defp plugin_state(%{} = target), do: Map.get(target, plugin_state_key(), %{})
-  defp plugin_state(_), do: %{}
-
-  defp target_id(%{id: id}) when is_binary(id), do: id
-  defp target_id(%{agent: %{id: id}}) when is_binary(id), do: id
-  defp target_id(_), do: nil
-
-  defp pick_value(opts, attrs, key, default) do
-    case Keyword.fetch(opts, key) do
-      {:ok, value} -> value
-      :error -> Map.get(attrs, key, Map.get(attrs, Atom.to_string(key), default))
     end
   end
 end

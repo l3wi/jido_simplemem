@@ -105,8 +105,15 @@ defmodule Jido.SimpleMem.Planner do
     end
   end
 
-  defp normalize_question_type(value) when is_binary(value),
-    do: normalize_question_type(String.to_atom(value))
+  defp normalize_question_type(value) when is_binary(value) do
+    case String.trim(value) do
+      "factual" -> :factual
+      "temporal" -> :temporal
+      "entity" -> :entity
+      "multi_hop" -> :multi_hop
+      _ -> :factual
+    end
+  end
 
   defp normalize_question_type(value) when value in [:factual, :temporal, :entity, :multi_hop],
     do: value

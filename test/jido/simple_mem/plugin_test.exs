@@ -1,5 +1,7 @@
 defmodule Jido.SimpleMem.PluginTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
 
   alias Jido.Memory.Record
   alias Jido.SimpleMem.Plugin
@@ -59,6 +61,10 @@ defmodule Jido.SimpleMem.PluginTest do
     end
   end
 
+  def forward_telemetry(event, measurements, metadata, pid) do
+    send(pid, {:telemetry_event, event, measurements, metadata})
+  end
+
   test "signal routes expose only the parity actions" do
     routes = Plugin.signal_routes(%{})
 
@@ -78,6 +84,29 @@ defmodule Jido.SimpleMem.PluginTest do
     agent = %{id: "plugin-agent"}
     assert {:ok, state} = Plugin.mount(agent, %{})
     assert {Jido.SimpleMem.Store.Lance, _opts} = state.store
+  end
+
+  test "plugin config omits removed legacy knobs" do
+    schema = inspect(Plugin.config_schema())
+    agent = %{id: "plugin-agent"}
+
+    assert {:ok, state} =
+             Plugin.mount(agent, %{
+               enable_parallel_processing: false,
+               max_parallel_workers: 1,
+               enable_planning: false,
+               capture_rules: %{skip: true}
+             })
+
+    refute schema =~ "enable_parallel_processing"
+    refute schema =~ "max_parallel_workers"
+    refute schema =~ "enable_planning"
+    refute schema =~ "capture_rules"
+
+    refute Map.has_key?(state, :enable_parallel_processing)
+    refute Map.has_key?(state, :max_parallel_workers)
+    refute Map.has_key?(state, :enable_planning)
+    refute Map.has_key?(state, :capture_rules)
   end
 
   test "pre_turn/post_turn/finalize and signal auto-capture work with plugin state" do
@@ -158,6 +187,51 @@ defmodule Jido.SimpleMem.PluginTest do
 
     assert {:ok, {:ok, %{buffer_remaining: 0, finalized?: true, auto_finalized?: true}}} =
              Jido.SimpleMem.await_job(job_id)
+  end
+
+  test "handle_signal returns a typed error and emits visibility when auto-capture fails" do
+    test_pid = self()
+    handler_id = "simplemem-plugin-auto-capture-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:jido, :simple_mem, :plugin, :auto_capture, :stop],
+      &__MODULE__.forward_telemetry/4,
+      test_pid
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    context = %{
+      agent: %{
+        state: %{
+          __simplemem__: %{
+            auto_capture: true,
+            capture_signal_patterns: ["ai.react.query"],
+            session_id: "signal-session"
+          }
+        }
+      }
+    }
+
+    signal = %Signal{
+      id: "sig-failure",
+      type: "ai.react.query",
+      source: "test",
+      data: %{query: "Remember this"}
+    }
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:auto_capture_failed, :namespace_required}} =
+                 Plugin.handle_signal(signal, context)
+      end)
+
+    assert log =~ "SimpleMem auto-capture failed"
+
+    assert_receive {:telemetry_event, [:jido, :simple_mem, :plugin, :auto_capture, :stop],
+                    %{count: 1},
+                    %{reason: :namespace_required, signal_type: "ai.react.query", status: :error}}
   end
 
   defp eventually_finalize(context, attempts \\ 10)

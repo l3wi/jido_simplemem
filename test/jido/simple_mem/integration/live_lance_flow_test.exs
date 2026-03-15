@@ -47,7 +47,10 @@ defmodule Jido.SimpleMem.Integration.LiveLanceFlowTest do
         target = context.target
 
         assert {:ok, result} = SimpleMem.ask(target, "What does Morgan Lee prefer?")
-        assert contains_text?(result.answer, "pour-over") or contains_text?(result.answer, "coffee")
+
+        assert contains_text?(result.answer, "pour-over") or
+                 contains_text?(result.answer, "coffee")
+
         refute contains_text?(result.answer, "black tea")
         assert length(result.records) >= 1
       end
@@ -108,11 +111,8 @@ defmodule Jido.SimpleMem.Integration.LiveLanceFlowTest do
           embedding_client_opts: Config.default_embedding_client_opts(),
           window_size: 2,
           overlap_size: 1,
-          enable_parallel_processing: false,
-          max_parallel_workers: 2,
           enable_parallel_retrieval: false,
           max_retrieval_workers: 2,
-          enable_planning: true,
           retrieval_limit: 6,
           context_token_budget: 1_200,
           reflection_enabled: true,
@@ -126,7 +126,8 @@ defmodule Jido.SimpleMem.Integration.LiveLanceFlowTest do
     [
       %{
         speaker: "user",
-        content: "Remember this durable fact: Morgan Lee lives in Denver and prefers pour-over coffee."
+        content:
+          "Remember this durable fact: Morgan Lee lives in Denver and prefers pour-over coffee."
       },
       %{
         speaker: "user",

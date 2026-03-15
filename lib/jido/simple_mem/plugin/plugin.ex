@@ -10,11 +10,14 @@ defmodule Jido.SimpleMem.Plugin do
   Single-tier, buffered SimpleMem plugin for Jido agents.
   """
 
+  require Logger
+
   alias Jido.Signal
   alias Jido.SimpleMem.Actions.{Ask, DeleteMemory, Finalize, GetAllMemories, PostTurn, PreTurn}
-  alias Jido.SimpleMem.Config
+  alias Jido.SimpleMem.Runtime
 
   @default_capture_patterns ["ai.react.query", "ai.llm.response", "ai.tool.result"]
+  @auto_capture_event [:jido, :simple_mem, :plugin, :auto_capture, :stop]
 
   @state_schema Zoi.object(%{
                   namespace: Zoi.string() |> Zoi.optional(),
@@ -28,14 +31,10 @@ defmodule Jido.SimpleMem.Plugin do
                   auto_capture: Zoi.boolean() |> Zoi.default(true),
                   capture_signal_patterns:
                     Zoi.list(Zoi.string()) |> Zoi.default(@default_capture_patterns),
-                  capture_rules: Zoi.map() |> Zoi.default(%{}),
                   window_size: Zoi.integer() |> Zoi.default(6),
                   overlap_size: Zoi.integer() |> Zoi.default(2),
-                  enable_parallel_processing: Zoi.boolean() |> Zoi.default(true),
-                  max_parallel_workers: Zoi.integer() |> Zoi.default(4),
                   enable_parallel_retrieval: Zoi.boolean() |> Zoi.default(true),
                   max_retrieval_workers: Zoi.integer() |> Zoi.default(4),
-                  enable_planning: Zoi.boolean() |> Zoi.default(true),
                   retrieval_limit: Zoi.integer() |> Zoi.default(10),
                   context_token_budget: Zoi.integer() |> Zoi.default(1200),
                   tokens_before_finalize: Zoi.integer() |> Zoi.default(60),
@@ -58,14 +57,10 @@ defmodule Jido.SimpleMem.Plugin do
                    auto_capture: Zoi.boolean() |> Zoi.default(true),
                    capture_signal_patterns:
                      Zoi.list(Zoi.string()) |> Zoi.default(@default_capture_patterns),
-                   capture_rules: Zoi.map() |> Zoi.default(%{}),
                    window_size: Zoi.integer() |> Zoi.default(6),
                    overlap_size: Zoi.integer() |> Zoi.default(2),
-                   enable_parallel_processing: Zoi.boolean() |> Zoi.default(true),
-                   max_parallel_workers: Zoi.integer() |> Zoi.default(4),
                    enable_parallel_retrieval: Zoi.boolean() |> Zoi.default(true),
                    max_retrieval_workers: Zoi.integer() |> Zoi.default(4),
-                   enable_planning: Zoi.boolean() |> Zoi.default(true),
                    retrieval_limit: Zoi.integer() |> Zoi.default(10),
                    context_token_budget: Zoi.integer() |> Zoi.default(1200),
                    tokens_before_finalize: Zoi.integer() |> Zoi.default(60),
@@ -93,38 +88,7 @@ defmodule Jido.SimpleMem.Plugin do
 
   @impl Jido.Plugin
   def mount(agent, config) do
-    defaults = Config.defaults()
-    namespace = resolve_namespace(agent, config)
-
-    {:ok,
-     %{
-       namespace: namespace,
-       store: config[:store] || defaults.store,
-       store_opts: config[:store_opts] || [],
-       llm_client: config[:llm_client] || defaults.llm_client,
-       llm_client_opts: config[:llm_client_opts] || defaults.llm_client_opts,
-       embedding_client: config[:embedding_client] || defaults.embedding_client,
-       embedding_client_opts: config[:embedding_client_opts] || defaults.embedding_client_opts,
-       session_id: config[:session_id] || agent_id!(agent),
-       auto_capture: Map.get(config, :auto_capture, true),
-       capture_signal_patterns: config[:capture_signal_patterns] || @default_capture_patterns,
-       capture_rules: config[:capture_rules] || %{},
-       window_size: config[:window_size] || defaults.window_size,
-       overlap_size: config[:overlap_size] || defaults.overlap_size,
-       enable_parallel_processing:
-         Map.get(config, :enable_parallel_processing, defaults.enable_parallel_processing),
-       max_parallel_workers: config[:max_parallel_workers] || defaults.max_parallel_workers,
-       enable_parallel_retrieval:
-         Map.get(config, :enable_parallel_retrieval, defaults.enable_parallel_retrieval),
-       max_retrieval_workers: config[:max_retrieval_workers] || defaults.max_retrieval_workers,
-       enable_planning: Map.get(config, :enable_planning, defaults.enable_planning),
-       retrieval_limit: config[:retrieval_limit] || defaults.retrieval_limit,
-       context_token_budget: config[:context_token_budget] || defaults.context_token_budget,
-       tokens_before_finalize:
-         Map.get(config, :tokens_before_finalize, defaults.tokens_before_finalize),
-       reflection_enabled: Map.get(config, :reflection_enabled, defaults.reflection_enabled),
-       max_reflection_rounds: config[:max_reflection_rounds] || defaults.max_reflection_rounds
-     }}
+    Runtime.build_plugin_state(agent, config)
   end
 
   @impl Jido.Plugin
@@ -141,11 +105,7 @@ defmodule Jido.SimpleMem.Plugin do
 
   @impl Jido.Plugin
   def handle_signal(%Signal{} = signal, context) do
-    state =
-      context
-      |> Map.get(:agent, %{})
-      |> Map.get(:state, %{})
-      |> Map.get(:__simplemem__, %{})
+    state = Runtime.plugin_state(Map.get(context, :agent, %{}))
 
     should_capture =
       Map.get(state, :auto_capture, true) and
@@ -154,13 +114,10 @@ defmodule Jido.SimpleMem.Plugin do
           Map.get(state, :capture_signal_patterns, @default_capture_patterns)
         )
 
-    if should_capture do
-      maybe_capture_signal(signal, context, state)
+    case maybe_capture_signal(signal, context, state, should_capture) do
+      {:ok, _status} -> {:ok, :continue}
+      {:error, reason} -> {:error, {:auto_capture_failed, reason}}
     end
-
-    {:ok, :continue}
-  rescue
-    _ -> {:ok, :continue}
   end
 
   @impl Jido.Plugin
@@ -170,39 +127,72 @@ defmodule Jido.SimpleMem.Plugin do
   def on_restore(pointer, _context) when is_map(pointer), do: {:ok, pointer}
   def on_restore(_pointer, _context), do: {:ok, nil}
 
-  defp maybe_capture_signal(%Signal{} = signal, context, state) do
-    dialogue =
-      case signal.type do
-        "ai.react.query" ->
-          %{
-            speaker: "user",
-            content: signal.data[:query] || signal.data["query"] || inspect(signal.data)
-          }
+  defp maybe_capture_signal(_signal, _context, _state, false), do: {:ok, :ignored}
 
-        "ai.llm.response" ->
-          %{
-            speaker: "assistant",
-            content: signal.data[:text] || signal.data["text"] || inspect(signal.data)
-          }
+  defp maybe_capture_signal(%Signal{} = signal, context, state, true) do
+    case build_capture_dialogue(signal) do
+      nil ->
+        emit_auto_capture(:ignored, signal, state)
+        {:ok, :ignored}
 
-        "ai.tool.result" ->
-          %{
-            speaker: "tool",
-            content: signal.data[:result] || signal.data["result"] || inspect(signal.data)
-          }
+      dialogue ->
+        opts = [session_id: state[:session_id]]
 
-        _ ->
-          nil
-      end
+        case Jido.SimpleMem.add_dialogues(
+               Map.get(context, :agent, %{}),
+               [Map.put(dialogue, :metadata, %{"signal_type" => signal.type})],
+               opts
+             ) do
+          {:ok, _result} = ok ->
+            emit_auto_capture(:ok, signal, state)
+            ok
 
-    if is_map(dialogue) do
-      _ =
-        Jido.SimpleMem.enqueue_add_dialogues(
-          Map.get(context, :agent, %{}),
-          [Map.put(dialogue, :metadata, %{"signal_type" => signal.type})],
-          session_id: state[:session_id]
-        )
+          {:error, reason} = error ->
+            Logger.warning("SimpleMem auto-capture failed for #{signal.type}: #{inspect(reason)}")
+            emit_auto_capture(:error, signal, state, reason)
+            error
+        end
     end
+  end
+
+  defp build_capture_dialogue(%Signal{} = signal) do
+    data = normalize_signal_data(signal.data)
+
+    case signal.type do
+      "ai.react.query" ->
+        %{
+          speaker: "user",
+          content: Runtime.map_value(data, :query) || inspect(signal.data)
+        }
+
+      "ai.llm.response" ->
+        %{
+          speaker: "assistant",
+          content: Runtime.map_value(data, :text) || inspect(signal.data)
+        }
+
+      "ai.tool.result" ->
+        %{
+          speaker: "tool",
+          content: Runtime.map_value(data, :result) || inspect(signal.data)
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  defp emit_auto_capture(status, signal, state, reason \\ nil) do
+    metadata =
+      %{
+        status: status,
+        signal_type: signal.type,
+        session_id: state[:session_id],
+        namespace: state[:namespace]
+      }
+      |> maybe_put(:reason, reason)
+
+    :telemetry.execute(@auto_capture_event, %{count: 1}, metadata)
   end
 
   defp signal_matches_any?(_type, []), do: false
@@ -229,18 +219,10 @@ defmodule Jido.SimpleMem.Plugin do
     end)
   end
 
-  defp resolve_namespace(agent, config) do
-    config[:namespace] ||
-      case config[:namespace_mode] do
-        :shared -> "shared:" <> (config[:shared_namespace] || "default")
-        _ -> "agent:" <> agent_id!(agent)
-      end
-  end
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp agent_id!(agent) do
-    case Map.get(agent, :id) do
-      id when is_binary(id) and id != "" -> id
-      _ -> raise ArgumentError, "agent id required for per_agent namespace"
-    end
-  end
+  defp normalize_signal_data(%{} = data), do: data
+  defp normalize_signal_data(nil), do: %{}
+  defp normalize_signal_data(other), do: %{value: other}
 end

@@ -21,11 +21,8 @@ defmodule Jido.SimpleMem.Config do
       tokens_before_finalize: 60,
       window_size: 6,
       overlap_size: 2,
-      enable_parallel_processing: true,
-      max_parallel_workers: 4,
       enable_parallel_retrieval: true,
       max_retrieval_workers: 4,
-      enable_planning: true,
       reflection_enabled: true,
       max_reflection_rounds: 2
     }

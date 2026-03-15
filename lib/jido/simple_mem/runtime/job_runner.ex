@@ -3,6 +3,8 @@ defmodule Jido.SimpleMem.JobRunner do
 
   use GenServer
 
+  @default_completed_job_limit 100
+
   @type job_result :: {:ok, term()} | {:error, term()}
   @type job_info :: %{
           id: String.t(),
@@ -13,6 +15,15 @@ defmodule Jido.SimpleMem.JobRunner do
           completed_at: nil | integer(),
           meta: map()
         }
+
+  @spec completed_job_limit() :: pos_integer()
+  def completed_job_limit do
+    Application.get_env(
+      :jido_simplemem,
+      :job_runner_completed_job_limit,
+      @default_completed_job_limit
+    )
+  end
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -136,7 +147,13 @@ defmodule Jido.SimpleMem.JobRunner do
           |> Map.put(:completed_at, now)
 
         Enum.each(job.waiters, &GenServer.reply(&1, result))
-        %{state | jobs: Map.put(state.jobs, job_id, Map.put(completed, :waiters, []))}
+
+        jobs =
+          state.jobs
+          |> Map.put(job_id, Map.put(completed, :waiters, []))
+          |> trim_completed_jobs(completed_job_limit())
+
+        %{state | jobs: jobs}
     end
   end
 
@@ -147,6 +164,22 @@ defmodule Jido.SimpleMem.JobRunner do
 
   defp status_from_result({:ok, _}), do: :completed
   defp status_from_result({:error, _}), do: :failed
+
+  defp trim_completed_jobs(jobs, limit) when is_integer(limit) and limit > 0 do
+    completed_ids =
+      jobs
+      |> Enum.filter(fn {_job_id, job} -> job.status in [:completed, :failed] end)
+      |> Enum.sort_by(
+        fn {job_id, job} -> {job.completed_at || 0, job.started_at || 0, job_id} end,
+        :desc
+      )
+      |> Enum.drop(limit)
+      |> Enum.map(&elem(&1, 0))
+
+    Enum.reduce(completed_ids, jobs, &Map.delete(&2, &1))
+  end
+
+  defp trim_completed_jobs(jobs, _limit), do: jobs
 
   defp unique_job_id(kind) do
     "smem_job_" <>

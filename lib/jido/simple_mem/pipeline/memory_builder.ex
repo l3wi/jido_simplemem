@@ -3,6 +3,26 @@ defmodule Jido.SimpleMem.MemoryBuilder do
 
   alias Jido.SimpleMem.{Dialogue, Extractor, Mapper, Synthesizer}
 
+  @allowed_attr_keys %{
+    "id" => :id,
+    "restatement" => :restatement,
+    "text" => :text,
+    "keywords" => :keywords,
+    "timestamp" => :timestamp,
+    "location" => :location,
+    "persons" => :persons,
+    "entities" => :entities,
+    "topic" => :topic,
+    "metadata" => :metadata,
+    "content" => :content,
+    "observed_at" => :observed_at,
+    "kind" => :kind,
+    "class" => :class,
+    "tags" => :tags,
+    "source" => :source,
+    "expires_at" => :expires_at
+  }
+
   @spec add_dialogues([Dialogue.t()], map()) :: {:ok, map()} | {:error, term()}
   def add_dialogues(dialogues, runtime) when is_list(dialogues) do
     {:ok, buffer_state} =
@@ -256,7 +276,7 @@ defmodule Jido.SimpleMem.MemoryBuilder do
       Enum.map(attrs_list, fn attrs ->
         attrs =
           attrs
-          |> Map.new(fn {key, value} -> {normalize_key(key), value} end)
+          |> normalize_external_attrs()
           |> Map.put_new(:content, %{
             "dialogues" => Enum.map(dialogues, &dialogue_to_map/1)
           })
@@ -317,8 +337,18 @@ defmodule Jido.SimpleMem.MemoryBuilder do
   defp dialogue_id(%Dialogue{} = dialogue), do: dialogue.dialogue_id
   defp dialogue_id(%{} = dialogue), do: dialogue["dialogue_id"] || dialogue[:dialogue_id]
 
-  defp normalize_key(key) when is_binary(key), do: String.to_atom(key)
-  defp normalize_key(key), do: key
+  defp normalize_external_attrs(%{} = attrs) do
+    Enum.reduce(attrs, %{}, fn
+      {key, value}, acc when is_atom(key) ->
+        Map.put(acc, key, value)
+
+      {key, value}, acc when is_binary(key) ->
+        case Map.fetch(@allowed_attr_keys, key) do
+          {:ok, atom_key} -> Map.put(acc, atom_key, value)
+          :error -> acc
+        end
+    end)
+  end
 
   defp validate_extraction([], dialogues, previous_entries) do
     if previous_entries == [] and memory_worthy_window?(dialogues) do
@@ -358,7 +388,9 @@ defmodule Jido.SimpleMem.MemoryBuilder do
     endpoint_model?(runtime.llm_opts[:synthesis_model] || runtime.llm_opts[:model])
   end
 
-  defp endpoint_model?(%{base_url: base_url}) when is_binary(base_url) and base_url != "", do: true
+  defp endpoint_model?(%{base_url: base_url}) when is_binary(base_url) and base_url != "",
+    do: true
+
   defp endpoint_model?(_model), do: false
 
   defp distinct_entry_set?(entries) when length(entries) <= 1, do: true
@@ -371,13 +403,15 @@ defmodule Jido.SimpleMem.MemoryBuilder do
       end)
 
     unique_signatures = MapSet.new(signatures)
-    distinct_identities = signatures |> Enum.map(&elem(&1, 0)) |> Enum.reject(&is_nil/1) |> MapSet.new()
+
+    distinct_identities =
+      signatures |> Enum.map(&elem(&1, 0)) |> Enum.reject(&is_nil/1) |> MapSet.new()
 
     MapSet.size(unique_signatures) == length(signatures) and
       MapSet.size(distinct_identities) == length(signatures)
   end
 
-  defp normalize_attrs(%{} = attrs), do: Map.new(attrs, fn {key, value} -> {normalize_key(key), value} end)
+  defp normalize_attrs(%{} = attrs), do: normalize_external_attrs(attrs)
   defp normalize_attrs(_attrs), do: %{}
 
   defp primary_identity(attrs) do

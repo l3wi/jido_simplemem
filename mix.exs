@@ -12,6 +12,7 @@ defmodule Jido.SimpleMem.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
+      test_load_filters: [&String.ends_with?(&1, "_test.exs"), ~r/^test\/support\//],
       description: "Buffered, LLM-first SimpleMem memory system for Jido agents",
       source_url: @source_url
     ]
