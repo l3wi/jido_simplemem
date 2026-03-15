@@ -4,7 +4,9 @@ defmodule Jido.SimpleMem.TestSupport.FakeLLMClient do
   alias Jido.Memory.Record
   alias Jido.SimpleMem.{Dialogue, Tokenizer}
 
-  @question_words MapSet.new(~w[who what when where why how does do did is are can should i me my we our])
+  @question_words MapSet.new(
+                    ~w[who what when where why how does do did is are can should i me my we our]
+                  )
 
   @impl true
   def extract_window(dialogues, previous_entries, _opts) do
@@ -91,7 +93,9 @@ defmodule Jido.SimpleMem.TestSupport.FakeLLMClient do
         {:ok, %{"status" => "no_results", "additional_queries" => [%{"query" => question}]}}
 
       String.match?(question, ~r/\bwhere\b/i) and
-          Enum.all?(records, fn record -> not String.match?(record.text || "", ~r/\bin\b|\bat\b/i) end) ->
+          Enum.all?(records, fn record ->
+            not String.match?(record.text || "", ~r/\bin\b|\bat\b/i)
+          end) ->
         {:ok,
          %{
            "status" => "incomplete",
@@ -140,8 +144,15 @@ defmodule Jido.SimpleMem.TestSupport.FakeLLMClient do
     else
       top =
         Enum.max_by(filtered_records, fn %Record{} = record ->
-          overlap = Tokenizer.overlap(Tokenizer.tokens(question), Tokenizer.tokens(record.text || ""))
-          person_bonus = if Enum.any?(extract_people(question), &(&1 in (get_in(record.metadata, ["simplemem", "persons"]) || []))), do: 5, else: 0
+          overlap =
+            Tokenizer.overlap(Tokenizer.tokens(question), Tokenizer.tokens(record.text || ""))
+
+          person_bonus =
+            if Enum.any?(
+                 extract_people(question),
+                 &(&1 in (get_in(record.metadata, ["simplemem", "persons"]) || []))
+               ), do: 5, else: 0
+
           intent_bonus = intent_bonus(question, record.text || "")
           overlap + person_bonus + intent_bonus
         end)
@@ -156,7 +167,11 @@ defmodule Jido.SimpleMem.TestSupport.FakeLLMClient do
     end
   end
 
-  defp extract_dialogue_entries(%Dialogue{content: content, speaker: speaker, timestamp: timestamp}) do
+  defp extract_dialogue_entries(%Dialogue{
+         content: content,
+         speaker: speaker,
+         timestamp: timestamp
+       }) do
     text = String.trim(content)
 
     cond do
@@ -211,7 +226,8 @@ defmodule Jido.SimpleMem.TestSupport.FakeLLMClient do
       length(people) > 0 and String.match?(sentence, ~r/\bprefer|likes?|loves?|favorite\b/i) ->
         [entry(ensure_sentence(sentence), people, location, timestamp, "profile")]
 
-      length(people) > 0 and String.match?(sentence, ~r/\blives in|works in|works at|based in|from\b/i) ->
+      length(people) > 0 and
+          String.match?(sentence, ~r/\blives in|works in|works at|based in|from\b/i) ->
         [entry(ensure_sentence(sentence), people, location, timestamp, "profile")]
 
       String.match?(sentence, ~r/\bmeet\b/i) ->
@@ -285,7 +301,8 @@ defmodule Jido.SimpleMem.TestSupport.FakeLLMClient do
           String.match?(text, ~r/\bprefer|like|love|favorite\b/i) ->
         5
 
-      String.match?(question, ~r/\bwhere\b/i) and String.match?(text, ~r/\blives in|works in|works at|based in|from\b/i) ->
+      String.match?(question, ~r/\bwhere\b/i) and
+          String.match?(text, ~r/\blives in|works in|works at|based in|from\b/i) ->
         5
 
       String.match?(question, ~r/\bname\b/i) and String.match?(text, ~r/\bname\b/i) ->

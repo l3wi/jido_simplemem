@@ -87,6 +87,7 @@ defmodule Jido.SimpleMem.TestSupport.FakeLanceClient do
 
   def replace_buffer(namespace, session_id, state, opts) do
     table = ensure_buffer_table(opts)
+
     normalized =
       case state do
         %{} = value ->
@@ -148,18 +149,24 @@ defmodule Jido.SimpleMem.TestSupport.FakeLanceClient do
   defp score_candidate(row, plan) do
     lexical_overlap =
       overlap(plan[:keywords] || [], row["keywords"] || []) +
-        overlap(plan[:keywords] || [], String.split(String.downcase(row["lossless_restatement"] || "")))
+        overlap(
+          plan[:keywords] || [],
+          String.split(String.downcase(row["lossless_restatement"] || ""))
+        )
 
     semantic_score =
       cosine(plan[:query_embedding] || [], row["vector"] || [])
 
     symbolic_hits =
-      Enum.count([
-        Enum.any?(plan[:persons] || [], &(&1 in (row["persons"] || []))),
-        Enum.any?(plan[:entities] || [], &(&1 in (row["entities"] || []))),
-        not is_nil(plan[:location]) and row["location"] == plan[:location],
-        time_match?(row["timestamp"], plan[:time_expression])
-      ], & &1)
+      Enum.count(
+        [
+          Enum.any?(plan[:persons] || [], &(&1 in (row["persons"] || []))),
+          Enum.any?(plan[:entities] || [], &(&1 in (row["entities"] || []))),
+          not is_nil(plan[:location]) and row["location"] == plan[:location],
+          time_match?(row["timestamp"], plan[:time_expression])
+        ],
+        & &1
+      )
 
     channels =
       []

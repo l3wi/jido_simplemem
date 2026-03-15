@@ -1,5 +1,7 @@
 defmodule Jido.SimpleMem.Dialogue do
-  @moduledoc false
+  @moduledoc """
+  Normalized dialogue entry used by the buffered ingestion pipeline.
+  """
 
   defstruct [:dialogue_id, :speaker, :content, :timestamp, :metadata]
 

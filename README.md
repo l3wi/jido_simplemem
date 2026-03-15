@@ -10,7 +10,6 @@ package adapts that model to the Jido plugin/action lifecycle and to an Elixir
 runtime backed by [LanceDB](https://github.com/lancedb/lancedb). The default
 runtime path uses
 [jido_action](https://github.com/agentjido/jido_action),
-[jido_memory](https://github.com/agentjido/jido_memory), and
 [ReqLLM](https://github.com/agentjido/req_llm).
 
 At a glance:
@@ -90,9 +89,9 @@ you switch to an embedding model with a different vector size, clear the store
 or re-embed the existing data first.
 
 If you want a runnable example, see
-[examples/simple_memory_agent.ex](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/examples/simple_memory_agent.ex)
+[examples/simple_memory_agent.ex](examples/simple_memory_agent.ex)
 and
-[examples/simple_memory_demo.exs](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/examples/simple_memory_demo.exs).
+[examples/simple_memory_demo.exs](examples/simple_memory_demo.exs).
 
 ## Public Surfaces
 
@@ -166,13 +165,16 @@ Important behavior:
 
 The repository is organized by subsystem:
 
-- [lib/jido/simple_mem/domain](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/domain): core data structures such as `Dialogue`, `MemoryUnit`, and embedding helpers
-- [lib/jido/simple_mem/pipeline](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/pipeline): extraction, synthesis, planning, retrieval, explanation, and answer generation
-- [lib/jido/simple_mem/runtime](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/runtime): shared runtime/config resolution, supervision, and job handling
-- [lib/jido/simple_mem/plugin](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/plugin): plugin integration and Jido actions
-- [lib/jido/simple_mem/store](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/lib/jido/simple_mem/store): LanceDB storage adapter and Python worker bridge
-- [test/support](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/test/support): test fixtures, fake clients, and target builders
-- [examples](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/examples): minimal agent/demo flows
+- `lib/jido/simple_mem/domain`: core data structures such as `Dialogue`,
+  `MemoryUnit`, and embedding helpers
+- `lib/jido/simple_mem/pipeline`: extraction, synthesis, planning, retrieval,
+  explanation, and answer generation
+- `lib/jido/simple_mem/runtime`: shared runtime/config resolution,
+  supervision, and job handling
+- `lib/jido/simple_mem/plugin`: plugin integration and Jido actions
+- `lib/jido/simple_mem/store`: LanceDB storage adapter and Python worker bridge
+- `test/support`: test fixtures, fake clients, and target builders
+- `examples`: minimal agent/demo flows
 
 ## Storage And Runtime Notes
 
@@ -271,12 +273,14 @@ Useful checks:
 ```bash
 mix format
 mix test
+mix release.check
 mix xref callers Jido.SimpleMem.Runtime
 ```
 
 ## Additional Docs
 
-- [Buffered SimpleMem Lifecycle](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/explanations/default-memory-policy.md)
-- [Lance Worker Architecture](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/architecture/lance-worker.md)
-- [ADR-0001: Single-Tier SimpleMem](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/decisions/ADR-0001-single-tier-simplemem.md)
-- [ADR-0002: SimpleMem Parity Refactor](/Users/lewi/Documents/ai/jido-workspace/jido-simplemem/docs/decisions/ADR-0002-simplemem-parity-refactor.md)
+- [Buffered SimpleMem Lifecycle](docs/explanations/default-memory-policy.md)
+- [Lance Worker Architecture](docs/architecture/lance-worker.md)
+- [ADR-0001: Single-Tier SimpleMem](docs/decisions/ADR-0001-single-tier-simplemem.md)
+- [ADR-0002: SimpleMem Parity Refactor](docs/decisions/ADR-0002-simplemem-parity-refactor.md)
+- [Releasing](RELEASING.md)

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-03-15
+
 - Replaced the old multi-backend storage layer with a LanceDB-only runtime.
 - Added a supervised Python LanceDB worker using the official SDK plus Tantivy
   FTS for local hybrid retrieval.
@@ -27,3 +29,5 @@
   typed plugin errors instead of silently swallowing them.
 - Added bounded completed-job retention in `Jido.SimpleMem.JobRunner`.
 - Updated docs, examples, and env configuration for Lance-only operation.
+- Added Hex package metadata, release docs, and a tag-driven GitHub Actions
+  release workflow.
